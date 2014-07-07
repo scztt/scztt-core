@@ -4,7 +4,6 @@ WindowViewRecall {
 	*initClass {
 		Archive.read();
 		saveArchive = Collapse({
-			"Flushing archive.".postln;
 			Archive.write();
 		}, 1);
 	}
