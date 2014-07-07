@@ -232,6 +232,8 @@ ServerSelectorWidget : ServerWidgetBase {
 		this.onRunning();
 		this.onDefault();
 
+		view.onClose_({ controller.remove() });
+
 		^view;
 	}
 	bootAction {
@@ -310,6 +312,8 @@ ServerStatusWidget : ServerWidgetBase {
 		view = View().layout_(
 			GridLayout.rows(*counterViews).spacing_(1).margins_(0)
 		);
+
+		view.onClose_({ controller.remove() });
 
 		^view;
 	}
@@ -510,6 +514,7 @@ VolumeWidget : ServerWidgetBase {
 
 			).margins_(0).spacing_(0)
 		);
+		view.onClose_({ controller.remove() });
 
 		^view;
 	}
