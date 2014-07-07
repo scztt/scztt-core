@@ -163,7 +163,7 @@ ServerSelectorWidget : ServerWidgetBase {
 			(27.asAscii.asSymbol): { parent.window.rememberPosition(parent.class); parent.close() },
 			'n': { server.queryAllNodes(true) },
 			'l': { server.tryPerform(\meter) },
-			'p': { if(server.serverRunning) { server.plotTree } },
+			'p': { if(server.serverRunning) { TreeSnapshotView(server).autoUpdate() } },
 			' ': { if(server.serverRunning.not) { server.boot } },
 			's': { server.scope(server.options.numOutputBusChannels) },
 			'f': { server.freqScope },
