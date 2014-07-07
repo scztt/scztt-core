@@ -43,7 +43,7 @@ ServerView : Singleton {
 		).spacing_(0).margins_(2));
 		widgetLayout.margins = 3;
 		widgetLayout.spacing = 1;
-		view.onClose_({ this.view = nil });
+		view.onClose_(this.onClose(_));
 		this.populateView();
 		view.front;
 	}
@@ -81,6 +81,12 @@ ServerView : Singleton {
 		});
 
 		widgetLayout.add(nil);
+	}
+
+	onClose {
+		|v|
+		window = widgetLayout = view = nil;
+		keyActions.clear;
 	}
 
 	clearView {
