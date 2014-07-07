@@ -8,8 +8,11 @@ ServerView : Singleton {
 		keyActions = IdentityDictionary();
 	}
 
-	set {
+	*default {
+		^Server.default;
 	}
+
+	set {}
 
 	close {
 		{ window.close() }.defer;
