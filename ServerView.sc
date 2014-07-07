@@ -30,8 +30,8 @@ ServerView : Singleton {
 
 	createView {
 		window = Window(bounds:Rect(0, 0, 235, 200), resizable:true, border:false);
-		window.recallPosition(ServerView);
-		window.autoRememberPosition(ServerView);
+		window.recallPosition(\ServerView);
+		window.autoRememberPosition(\ServerView);
 		view = window.view.minWidth_(235).minHeight_(200);
 		view.keyDownAction_({
 			|v, char|
