@@ -522,7 +522,7 @@ VolumeWidget : ServerWidgetBase {
 
 ScopeWidget : ServerWidgetBase {
 	var view, <scopeView, meters, <synth, levelSynth, levelsName, outresp, bus, rate=\audio, inChannels=2, outChannels=2, index=0,
-	updateFreq=18, dBLow = -80, numRMSSamps;
+	updateFreq=18, cycle=2048, dBLow = -80, numRMSSamps;
 
 	*new {
 		|...args|
@@ -560,7 +560,22 @@ ScopeWidget : ServerWidgetBase {
 			this.startSynth();
 		};
 
+		scopeView.mouseWheelAction_({ |...args| this.mouseWheelAction(*args) });
+
 		^view;
+	}
+
+	mouseWheelAction {
+		| v, x, y, mods, xScroll, yScroll |
+		if (scopeView.notNil) {
+			if (xScroll != 0) {
+				cycle = (cycle + (xScroll * 1)).linlin(100, 2048, 100, 2048);
+				synth.setCycle(cycle);
+			};
+			if (yScroll != 0) {
+				scopeView.yZoom = (scopeView.yZoom + (yScroll * 0.01)).linlin(1, 100, 1, 100);
+			};
+		}
 	}
 
 	playLevelSynth {
@@ -622,7 +637,7 @@ ScopeWidget : ServerWidgetBase {
 				brightBlue.hueAdd(i * 0.65);
 			};
 			scopeView.start();
-			synth.play(2048, bus, 2048);
+			synth.play(2048, bus, cycle);
 			this.playLevelSynth();
 		}
 	}
