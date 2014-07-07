@@ -535,7 +535,14 @@ ScopeWidget : ServerWidgetBase {
 		var subviews;
 		levelsName = (server.name ++ "OutputWidgetLevels");
 
-		meters = (inChannels + outChannels).collect { LevelIndicator().maxWidth_(8) };
+		meters = (inChannels + outChannels).collect {
+			(LevelIndicator()
+				.maxWidth_(8)
+				.stepWidth_(1)
+				.style_(1)
+				.drawsPeak_(true)
+			)
+		};
 		subviews = (meters[0..(inChannels-1)]
 			++ [[scopeView = ScopeView(), stretch:2]]
 			++ meters[inChannels..]);
