@@ -1,15 +1,19 @@
 Singleton {
 	classvar <>all, <>know=false, creatingNew=false;
-
 	var <>name, logString, <postWindow, <>postActions;
 
 	*initClass {
 		all = IdentityDictionary();
 	}
 
+	*default {
+		^\default
+	}
+
 	*new {
-		arg name = \default ...settings;
+		arg name ...settings;
 		var sing, classAll;
+		name = name ?? this.default;
 
 		classAll = all.atFail(this, {
 			all[this] = IdentityDictionary();
