@@ -6,10 +6,15 @@ NodeSnapshot {
 	}
 
 	== {
-		|other|
-		^(this.class == other.class) and: {
-			nodeId == other.nodeId
-		}
+		this.subclassResponsibility();
+		// |other|
+		// ^(this.class == other.class) and: {
+		// 	(nodeId == other.nodeId) and: {
+		// 		if (this.class == SynthSnapshot) {
+		// 			this.defName == other.defName;
+		// 		}
+		// 	}
+		// }
 	}
 
 }
@@ -37,6 +42,13 @@ GroupSnapshot : NodeSnapshot {
 		}
 		^str
 	}
+
+	== {
+		|other|
+		^(this.class == other.class) and: {
+			nodeId == other.nodeId;
+		}
+	}
 }
 
 SynthSnapshot : NodeSnapshot {
@@ -58,8 +70,10 @@ SynthSnapshot : NodeSnapshot {
 		| other |
 		// the only way we have of matching in cases where a synthdef has been changed from one update to the next is
 		// matching via the def itself, not the def name
-		^(this.class == other.class) and: {
-			(nodeId == other.nodeId) && (def == other.def);
+		if (this.class != other.class) {
+			^false
+		} {
+			^(nodeId == other.nodeId) && (defName == other.defName) && (def == other.def);
 		}
 	}
 
@@ -156,14 +170,19 @@ TraceParser {
 
 	parseSynth {
 		arg snapshot;
-		var controlCount;
+		var controlCount, lastControl;
 		snapshot.defName = this.next();
 		if (hasControls) {
 			controlCount = this.next();
 			controlCount.do {
 				var name, val;
 				name = this.next(); val = this.next();
-				snapshot.controls[name] = val;
+				if (name.isKindOf(Symbol)) {
+					lastControl = name;
+					snapshot.controls[name] = val;
+				} {
+					snapshot.controls[lastControl] = snapshot.controls[lastControl].asArray.add(val);
+				};
 			}
 		}
 	}
@@ -249,8 +268,7 @@ TreeSnapshot {
 
 TreeSnapshotView : Singleton {
 	var <view, <viewMap, <viewsInUse, currentSnapshot, collapse=false,
-	groupColor, groupOutline, autoUpdateRoutine
-	;
+	groupColor, groupOutline, autoUpdateRoutine, autoUpdate=true;
 
 	init {
 		viewMap = IdentityDictionary();
@@ -269,20 +287,17 @@ TreeSnapshotView : Singleton {
 
 	autoUpdate {
 		|up=true|
+		autoUpdate = up;
 		if (up && autoUpdateRoutine.isNil) {
-			autoUpdateRoutine = fork({
-				inf.do {
-					TreeSnapshot.get({
-						|sn|
-						this.update(sn);
-					});
-					0.5.wait;
-				}
-			});
-			this.front();
+			autoUpdateRoutine = SkipJack({
+				TreeSnapshot.get({
+					|sn|
+					this.update(sn);
+				});
+			}, 0.5);
 		} {
 			if (up.not && autoUpdateRoutine.notNil) {
-				autoUpdateRoutine.stop.reset();
+				autoUpdateRoutine.stop;
 				autoUpdateRoutine = nil;
 			}
 		}
@@ -324,8 +339,11 @@ TreeSnapshotView : Singleton {
 					viewsInUse.clear();
 					viewMap.clear();
 				};
-
 				view.front;
+				view.recallPosition(\TreeSnapshotView);
+				view.autoRememberPosition(\TreeSnapshotView);
+
+				this.autoUpdate(autoUpdate);
 			}.defer
 		})
 	}
@@ -439,7 +457,7 @@ TreeSnapshotView : Singleton {
 
 		(sv.view.background_(Color.grey(0.2, 0.8))
 			.minHeight_(20)
-			.drawFunc_(~drawBorder.(Color.grey(1, 0.3), _))
+			.drawFunc_(this.drawBorder(_, Color.grey(1, 0.3)))
 		);
 
 		^sv
@@ -461,15 +479,24 @@ TreeSnapshotView : Singleton {
 			),
 			nil,
 			[StaticText()
+				.string_("TRACE")
+				.align_(\right)
+				.font_(Font("M+ 1c", 7.5, true))
+				.mouseDownAction_({
+					sv.synth.asSynth.trace();
+				})
+				, align:\topRight
+			],
+			8,
+			[StaticText()
 				.string_("✕")
 				.align_(\right)
-				//				.stringColor_(QtGUI.palette.highlightText)
 				.font_(Font("M+ 1c", 8, true))
 				.mouseDownAction_({
 					sv.synth.asSynth.free();
 					TreeSnapshot.get({ |sn| this.update(sn); })
-				}),
-				align:\topRight
+				})
+				, align:\topRight
 			]
 		)
 	}
@@ -611,23 +638,31 @@ SynthSnapshotView {
 		snapshot.controls.keysValuesDo {
 			|controlName, value|
 			var view = controls[controlName];
-			if (view.hasFocus.not) {
-				view.string_("%".format(value.round(0.001)))
-				.action_({
-					|v|
-					var node, val;
-					val = v.value;
-					if ((val[0] == $c) || (val[0] == $a)) {
-						snapshot.asSynth.map(controlName.asSymbol, val[1..].asInteger)
-					} {
-						snapshot.asSynth.set(controlName.asSymbol, val.asFloat);
-					};
+			if (view.isNil) {
+				"View for control '%' of synth % was nil!".format(controlName, snapshot.nodeId).warn;
+			} {
+				if (view.hasFocus.not) {
+					view.string_("%".format(value.round(0.001)))
+					.action_({
+						|v|
+						var node, val;
+						val = v.value;
+						if ((val[0] == $c) || (val[0] == $a)) {
+							snapshot.asSynth.map(controlName.asSymbol, val[1..].asInteger)
+						} {
+							val = val.interpret;
+							if (val.notNil) {
+								snapshot.asSynth.setn(controlName.asSymbol, val);
+							}
+						};
 
-					{ v.background = Color.clear }.defer(0.1);
-					v.background_(v.background.blend(Color.green(1, 0.1)));
-					v.focus(false);
-				})
-			}
+						{ v.background = Color.clear }.defer(0.1);
+						v.background_(v.background.blend(Color.green(1, 0.1)));
+						v.focus(false);
+					})
+				}
+
+			};
 		}
 	}
 }
