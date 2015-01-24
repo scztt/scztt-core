@@ -119,7 +119,7 @@ ServerView : Singleton {
 
 ServerWidgetBase {
 	var server, parent, buttonColor, faintGreen, faintRed, faintYellow, faintBlue,
-	brightBlue, brightGreen, highlightColor;
+	brightBlue, brightGreen, brightRed, highlightColor;
 
 	*new {
 		|...args|
@@ -136,6 +136,7 @@ ServerWidgetBase {
 
 		brightBlue = Color.hsv(0.555, 1, 0.6 + mod);
 		brightGreen = Color.hsv(0.277, 1, 0.6 + mod);
+		brightRed = Color.hsv(0.01, 1, 0.6 + mod);
 
 		highlightColor = Color.grey(0.7 + mod);
 
@@ -163,7 +164,7 @@ ServerSelectorWidget : ServerWidgetBase {
 			(27.asAscii.asSymbol): { parent.window.rememberPosition(parent.class); parent.close() },
 			'n': { server.queryAllNodes(true) },
 			'l': { server.tryPerform(\meter) },
-			'p': { if(server.serverRunning) { TreeSnapshotView(server).autoUpdate() } },
+			'p': { if(server.serverRunning) { TreeSnapshotView(server).autoUpdate().front(); } },
 			' ': { if(server.serverRunning.not) { server.boot } },
 			's': { server.scope(server.options.numOutputBusChannels) },
 			'f': { server.freqScope },
@@ -326,7 +327,7 @@ ServerStatusWidget : ServerWidgetBase {
 	}
 
 	create_numUGens {
-		^NumberCounter("UGENS", "", this.font(8));
+		^GraphCounter("UGENS", "", this.font(8), brightBlue.alpha_(0.6), 0);
 	}
 
 	create_numSynths {
@@ -342,11 +343,11 @@ ServerStatusWidget : ServerWidgetBase {
 	}
 
 	create_avgCPU {
-		^GraphCounter("AVG CPU", "%", this.font(8), brightGreen, 0, 100);
+		^GraphCounter("AVG CPU", "%", this.font(8), brightGreen, 0, 100, brightRed.alpha_(0.6));
 	}
 
 	create_peakCPU {
-		^GraphCounter("PEAK CPU", "%", this.font(8), brightGreen, 0, 100);
+		^GraphCounter("PEAK CPU", "%", this.font(8), brightGreen, 0, 100, brightRed.alpha_(0.6));
 	}
 }
 
@@ -382,13 +383,13 @@ NumberCounter {
 }
 
 GraphCounter {
-	var name, units, font, color, min, max, minFixed=false, maxFixed=false,
+	var name, units, font, color, min, max, maxColor, minFixed=false, maxFixed=false,
 	<view, heading, number, history, <>span=1
 	;
 
 	*new {
-		|name, units, font, color, min, max|
-		^super.newCopyArgs(name, units, font, color, min, max, min.notNil, max.notNil)
+		|name, units, font, color, min, max, maxColor|
+		^super.newCopyArgs(name, units, font, color, min, max, maxColor, min.notNil, max.notNil)
 		.init;
 	}
 
@@ -426,8 +427,14 @@ GraphCounter {
 			};
 			Pen.lineTo(1@0);
 			Pen.lineTo(0@0);
-			Pen.fillColor = color.alpha_(0.3);
-			Pen.strokeColor = color.blend(Color.white, 0.1).alpha_(0.8);
+			if (maxColor.notNil && (history.first.linlin(min, max, 0, 1) > 0.9)) {
+				"maxed out!".postln;
+				Pen.fillColor = maxColor.alpha_(0.3);
+				Pen.strokeColor = maxColor.blend(Color.white, 0.1).alpha_(0.8);
+			} {
+				Pen.fillColor = color.alpha_(0.3);
+				Pen.strokeColor = color.blend(Color.white, 0.1).alpha_(0.8);
+			};
 			Pen.draw(3);
 
 			Pen.pop();
@@ -628,6 +635,8 @@ ScopeWidget : ServerWidgetBase {
 			bus = Bus(rate, index, outChannels, server);
 		};
 		if (synth.isPlaying.not) {
+			scopeView.stop();
+
 			scopeView.server = server;
 			scopeView.bufnum = bus.index;
 			scopeView.style = 1;
@@ -636,6 +645,7 @@ ScopeWidget : ServerWidgetBase {
 				| i |
 				brightBlue.hueAdd(i * 0.65);
 			};
+
 			scopeView.start();
 			synth.play(2048, bus, cycle);
 			this.playLevelSynth();
