@@ -50,6 +50,9 @@ Singleton {
 				} {
 					item = this.new(selector);
 				}
+			} {
+				|e|
+				e.postln;
 			};
 			creatingNew = false;
 			^item;
@@ -64,4 +67,18 @@ Singleton {
 		// Override this to receive 'settings' parameter from Singleton.new(name, settings)
 	}
 
+	*clear {
+		|sing|
+		var dict = all[this];
+		if (dict.notNil) {
+			var key = dict.findKeyForValue(sing);
+			if (key.notNil) {
+				dict[key] = nil;
+			}
+		}
+	}
+
+	clear {
+		this.class.clear(this);
+	}
 }
