@@ -1,12 +1,19 @@
 Log : Singleton {
-	classvar defaultFormatter, onErrorAction;
-	var <>actions, <>formatter, <>shouldPost = true, <>maxLength = 500, <lines;
+	classvar defaultFormatter, onErrorAction, levels;
+	var <>actions, <>formatter, <>shouldPost = true, <>maxLength = 500, <lines, <level, levelNum;
 
 	*initClass {
 		defaultFormatter = {
 			|item, log|
 			"[%]".format(log.name.asString().toUpper()).padRight(12) ++ item[\string];
-		}
+		};
+
+		levels = (
+			info: 0,
+			warning: 3,
+			error: 6,
+			critical: 9
+		);
 	}
 
 	*logErrors {
@@ -41,6 +48,13 @@ Log : Singleton {
 		actions = IdentitySet();
 		lines = LinkedList(maxLength);
 		formatter = defaultFormatter;
+		this.level = \warning;
+	}
+
+	level_{
+		|inLevel|
+		level = inLevel;
+		levelNum = levels[level];
 	}
 
 	addEntry {
@@ -51,25 +65,49 @@ Log : Singleton {
 		}
 	}
 
+	info {
+		| str ...items |
+		this.set(str.format(*items), \info)
+	}
+
+	warning {
+		| str ...items |
+		this.set(str.format(*items), \warning)
+	}
+
+	error {
+		| str ...items |
+		this.set(str.format(*items), \error)
+	}
+
+	critical {
+		| str ...items |
+		this.set(str.format(*items), \critical)
+	}
+
 	set {
-		| str, level = \default |
-		var logItem = (
-			\string: str,
-			\level: level,
-			\time: Date().rawSeconds
-		);
-		logItem[\formatted] = this.format(logItem);
+		| str, inLevel = \default |
+		var logLevel, logItem;
+		logLevel = levels[inLevel] ? 0;
+		if (logLevel >= levelNum) {
+			logItem = (
+				\string: str,
+				\level: level,
+				\time: Date().rawSeconds
+			);
+			logItem[\formatted] = this.format(logItem);
 
-		this.addEntry(logItem);
+			this.addEntry(logItem);
 
-		if (shouldPost) {
-			logItem[\formatted].postln;
-		};
+			if (shouldPost) {
+				logItem[\formatted].postln;
+			};
 
-		actions.do({
-			| action |
-			action.value(logItem, this);
-		});
+			actions.do({
+				| action |
+				action.value(logItem, this);
+			});
+		}
 	}
 
 	format {
