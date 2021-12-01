@@ -1,0 +1,148 @@
++SynthDef {
+	specs {
+		metadata ?? { metadata = () };
+		metadata[\specs] ?? { metadata[\specs] = () };
+		^metadata[\specs]
+	}
+}
+
++SynthDesc {
+	specs {
+		metadata ?? { metadata = () };
+		metadata[\specs] ?? { metadata[\specs] = () };
+		^metadata[\specs]
+	}
+}
+
++NodeProxy {
+	specs {
+		var specs = ();
+		this.objects.do {
+			|obj|
+			if (obj.respondsTo(\specs)) {
+				specs = specs.merge(obj.specs, {
+					|a, b, key|
+					"Duplicate specs for key: % - only one will be returned.".format(key).warn;
+					a;
+				});
+			}
+		};
+		^specs
+	}
+}
+
++SynthDefControl {
+	specs {
+		^synthDef.specs
+	}
+}
+
++ControlName {
+	spec {
+		^UGen.buildSynthDef.specs[name]
+	}
+
+	spec_{
+		|spec|
+		if (spec.notNil) {
+			spec = spec.asSpec;
+
+			// If spec has a default, use that for control default value,
+			// else if control has default, use it for spec default.
+			if (spec.default.notNil) {
+				this.defaultValue = spec.default;
+			} {
+				spec.default = this.defaultValue;
+			};
+
+			UGen.buildSynthDef.specs[name] !? _.setFrom(spec) ?? {
+				UGen.buildSynthDef.specs[name] = spec;
+			};
+		}
+	}
+}
+
++OutputProxy {
+	controlName {
+		var counter = 0, index = 0;
+
+		this.synthDef.children.do({
+			arg ugen;
+			if(this.source.synthIndex == ugen.synthIndex,
+				{ index = counter + this.outputIndex; });
+			if(ugen.isKindOf(Control),
+				{ counter = counter + ugen.channels.size; });
+		});
+
+		^synthDef.controlNames.detect({ |c| c.index == index });
+	}
+
+	spec_{
+		|spec|
+		var controlName, name;
+		controlName = this.controlName;
+		if (this.controlName.notNil) {
+			controlName.spec = spec;
+		} {
+			"Cannot set spec on a non-Control".error;
+		}
+	}
+}
+
++NamedControl {
+	*ar { arg  name, values, lags, spec;
+		^this.newSpec(name, values, \audio, lags, false, spec)
+	}
+
+	*kr { arg  name, values, lags, fixedLag = false, spec;
+		^this.newSpec(name, values, \control, lags, fixedLag, spec)
+	}
+
+	*ir { arg  name, values, lags, spec;
+		^this.newSpec(name, values, \scalar, lags, false, spec)
+	}
+
+	*tr { arg  name, values, lags, spec;
+		^this.newSpec(name, values, \trigger, lags, false, spec)
+	}
+
+	*newSpec { arg name, values, rate, lags, fixedLag = false, spec;
+		this.initDict;
+
+		if (spec.notNil) {
+			spec = spec.asSpec;
+
+			if (values.isNil) {
+				values = spec.default;
+			} {
+				if (spec.slotAt(4).isNil) {
+					spec.default = values.asArray[0];
+				};
+			};
+
+			UGen.buildSynthDef.specs[name] !? _.setFrom(spec) ?? {
+				UGen.buildSynthDef.specs[name] = spec;
+			};
+		};
+
+		^this.new(name, values, rate, lags, fixedLag, spec);
+	}
+}
+
++Symbol {
+	kr { | val, lag, fixedLag = false, spec |
+		^NamedControl.kr(this, val, lag, fixedLag, spec)
+	}
+
+	ir { | val, spec |
+		^NamedControl.ir(this, val, spec:spec)
+	}
+
+	tr { | val, spec |
+		^NamedControl.tr(this, val, spec:spec)
+	}
+
+	ar { | val, lag, spec |
+		^NamedControl.ar(this, val, lag, spec:spec)
+	}
+}

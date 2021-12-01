@@ -1,0 +1,121 @@
+TITLE:: GrainDelay2
+CATEGORIES:: SczttCore
+SUMMARY:: Flexible granular delay
+
+SECTION:: Playable Variations
+
+DEFINITIONLIST::
+	## LINK::#grainDelay2:: 			|| Feedbacking granular delay
+	## LINK::#grainDelay2.env:: 		|| Feedbacking with envelope arguments
+	## LINK::#grainDelay2.linked:: 		|| Feedbacking granular delay with shared buffer
+	## LINK::#grainDelay2.env.linked:: 	|| Feedbacking granular delay with shared buffer and envelope parameters
+::
+
+SECTION:: Parameters
+
+DEFINITIONLIST::
+	## CODE:: \in ::
+	|| input bus (audio rate)
+
+	## CODE:: \trig, \ttrig, \trigRate ::
+	|| Grain trigger. Trigger amplitude controls grain amplitude. \trigRate triggers are adde to \trig (audio rate / trigger rate)
+
+	## CODE:: \grainDur, \grainDurLag ::
+	|| Grain duration, seconds (audio rate)
+
+	## CODE:: \grainRate, \grainRateV, \grainRateLag ::
+	|| Grain playback rate. 1 = no change (audio rate)
+
+	## CODE:: \delay, \delayV, \delayLag ::
+	|| Amount of delay in seconds (audio rate)
+
+	## CODE:: \decay, \decayV, \decayLag ::
+	|| -60db decay time (audio rate)
+
+	## CODE:: \env, \envLag ::
+	|| Envelope shape (0 = short attack, 1 = long attack) (audio rate)
+
+	## CODE:: \pan, \panV, \panLag ::
+	|| Pan (-1..1) (audio rate)
+
+	## CODE:: \feedAmp, \feedDist, \feedLo, \feedHi, \feedLag ::
+	|| Feedback settings. \feedLag applies to all parameters (control rate)
+
+	## CODE:: \amp, \inAmp, \dryAmp, \ampLag ::
+	|| Feedback settings. \feedLag applies to all parameters (control rate)
+
+	## CODE:: \lagAdd, \lagMul ::
+	|| Multiply and add values for all lag parameters
+::
+
+CODE::
+// SETUP CODE
+// Run before running examples.
+(
+Gdef(\input, before:[\output]);
+Ndef(\input, {
+	var buf = SAMP("_drum_studies/03 - The Blind Departing_01")[0];
+	// Impulse.ar(4)
+	var sig = PlayBuf.ar(2, buf, rate:0.5 * BufDur.kr(buf) / 8, loop:1).mean;
+	sig = sig + (
+		Amplitude.ar(sig, 0.01, 0.5) *
+		PlayBuf.ar(1, SAMP("poems/Ann Lauterbach/*")[0], rate:0.5, loop:1)
+	);
+}).group_(Gdef(\input).group);
+Ndef(\trig, { Impulse.ar(10) }).group_(Gdef(\input).group);
+)
+::
+
+
+SECTION:: grainDelay2
+Feedbacking granular delay that owns it's own delay line.
+Intended for running continuously, with arguments modulated via audio rate bus mapping.
+
+CODE::
+(
+Synth(\grainDelay2, args:[
+	\in, 			Ndef(\input).asMap,
+	\trig, 			Ndef(\trig).asMap,
+	\delay, 		1/8,
+	\decay, 		4
+], target:Gdef(\output))
+)
+
+(
+Pdef('grainDelay2', Pmono(
+	\grainDelay2,
+	\parentType, 	\grainDelay2,
+	\in, 			Ndef(\input).asMap,
+	\trig, 			Ndef(\trig).asMap,
+	\delay, 		1/8,
+	\decay, 		4
+)).play;
+)
+::
+
+SECTION:: grainDelay2.env
+Feedbacking granular delay that owns it's own delay line.
+All parameters accept envelopes as argumentscc.
+
+CODE::
+(
+Pdef('grainDelay2.env', Pbind(
+	\parentType, 	'grainDelay2.env',
+	\dur,			4,
+	\legato, 		2,
+	\target,		Gdef(\output),
+	\in, 			Ndef(\input).asMap,
+	\trigRate, 		40,
+	\delay, 		`Env(1/[30, 3], curve:6),
+	\panV,			`Env([0, 0.4]),
+	\density, 		4,
+	\decay, 		4
+)).play;
+)
+::
+
+
+
+
+
+

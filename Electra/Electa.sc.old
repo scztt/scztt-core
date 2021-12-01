@@ -1,0 +1,638 @@
+ElectraDefBase {
+	classvar <fixedColors, <>roundColors=true;
+
+	*initClass {
+		fixedColors = [
+			Color.new255(255, 255.0, 255.0),
+			Color.new255(244.0, 92.0, 81.0),
+			Color.new255(244.0, 149.0, 0.0),
+			Color.new255(20, 90.0, 160),
+			Color.new255(3.0, 165.0, 152.0),
+			Color.new255(196.0, 71.0, 149.0)
+		]
+	}
+
+	*new {
+		^super.new.init
+	}
+
+	init {}
+
+	ignoreFields {
+		^[]
+	}
+
+	fields {
+		^Array.newFrom(this.class.instVarNames).removeAll(this.ignoreFields)
+	}
+
+	toDict {
+		var dict = ();
+		this.fields.do {
+			|varName|
+			dict[varName] = this.perform(varName)
+		};
+		^dict;
+	}
+
+	toJSON {
+		^this.toDict.toJSON;
+	}
+
+	colorToJSON {
+		|color|
+		if (color.isString) {
+			^color
+		} {
+			if (roundColors) {
+				var nearest = fixedColors.minIndex({
+					|otherColor|
+					(otherColor.asArray - color.asArray).pow(2).sum.pow(0.5)
+				});
+				color = fixedColors[nearest];
+			};
+			^(
+				((color.red * (2.pow(5)-1)).asInteger << 11)
+				+ ((color.green * (2.pow(6)-1)).asInteger << 5)
+				+ ((color.blue * (2.pow(5)-1)).asInteger << 0)
+			).asHexString[4..]
+		}
+	}
+}
+
+ElectraCCParamDef : ElectraDefBase {
+	const channelsPerPort=8;
+	var <msg="cc7", <midiMin=0, <midiMax=127;
+	var <>parameterId, <>deviceId=0;
+
+	*new {
+		|id, device=0|
+		^super.new.init.parameterId_(id).deviceId_(device)
+	}
+
+	toDict {
+		^super.toDict().putAll((
+			deviceId: 1 + deviceId
+		))
+	}
+
+	channel {
+		^(deviceId % channelsPerPort)
+	}
+
+	endpoint {
+		|source=false|
+		var port;
+		source = source.if(\sources, \destinations);
+		port = 1 + (deviceId / channelsPerPort).asInteger;
+		if (port > 2) {
+			Error("deviceId=% is out of range".format(deviceId)).throw
+		};
+		^MIDIClient.perform(source).detect({ |d| d.name == "Electra Port %".format(port) });
+	}
+}
+
+ElectraCC14ParamDef : ElectraDefBase {
+	const channelsPerPort=8;
+	var <msg="cc14", <midiMin=0, <midiMax=16383;
+	var <>parameterId, <>deviceId=0, <>lsbFirst=false;
+
+	*new {
+		|id, device=0|
+		^super.new.init.parameterId_(id).deviceId_(device)
+	}
+
+	toDict {
+		^super.toDict().putAll((
+			deviceId: 1 + deviceId
+		))
+	}
+
+	channel {
+		^(deviceId % channelsPerPort)
+	}
+
+	endpoint {
+		|source=false|
+		var port;
+		source = source.if(\sources, \destinations);
+		port = 1 + (deviceId / channelsPerPort).asInteger;
+		if (port > 2) {
+			Error("deviceId=% is out of range".format(deviceId)).throw
+		};
+		^MIDIClient.perform(source).detect({ |d| d.name == "Electra Port %".format(port) });
+	}
+}
+
+ElectraControlDef : ElectraDefBase {}
+
+
+ElectraFaderDef : ElectraControlDef {
+	var <>fgColor, <parameter,
+	<>max, <>min, <>defaultValue, <>defaultValue=0,
+	<>name="", <>type="fader",
+	<>overlay;
+
+	*fromSpec {
+		|controlSpec|
+		var def = this.new();
+		def.min = controlSpec.minval;
+		def.max = controlSpec.maxval;
+		def.defaultValue = controlSpec.default;
+		^def
+	}
+
+	*new {
+		^super.new.init
+	}
+
+	init {
+		this.fgColor = Color.green;
+		this.parameter = ElectraCC14ParamDef(0);
+		this.overlay = ElectraOverlayDef();
+	}
+
+	color_{
+		|c|
+		fgColor = c;
+	}
+
+	parameter_{
+		|p|
+		parameter = p;
+	}
+
+	ignoreFields { ^[\parameter] }
+
+	toDict {
+		^super.toDict
+		.putAll(parameter.toDict)
+		.putAll((
+			fgColor: this.colorToJSON(fgColor)
+		))
+	}
+}
+
+ElectraOverlayDef : ElectraDefBase {
+	var <>items;
+
+	init {
+		items = ();
+	}
+
+	put {
+		|index, value|
+		items[index] = value;
+	}
+
+	at {
+		|index|
+		^items[index]
+	}
+
+	toDict {
+		var dict, sorted;
+		sorted = items.asPairs.clump(2);
+		sorted.sort({ |a, b| a[1] > b[1] });
+		dict = (
+			items: sorted.collect {
+				|item|
+				(
+					value: item[0].asInteger,
+					label: item[1].asString
+				)
+			}
+		);
+		^dict
+	}
+
+	isEmpty {
+		^(items.size == 0)
+	}
+}
+
+ElectraGroupDef : ElectraDefBase {
+	var <>name, <>position, <>span, <>color;
+
+	*new {
+		|name, position, span, color|
+		^super.newCopyArgs(name, position, span, color ?? Color.red).init
+	}
+
+	range {
+		^Range(position, span - 1)
+	}
+
+	overlaps {
+		|other|
+		^((this !== other) and: {
+			this.range.overlaps(other.range)
+		})
+	}
+
+	toDict {
+		^super.toDict().putAll((
+			color: this.colorToJSON(color),
+			position: 1 + position
+		))
+	}
+}
+
+ElectraBank : ElectraDefBase {
+	const <bankSize=12, <bankCount=3;
+	var <>slots, <>groups;
+
+	init {
+		slots = nil ! 12;
+		groups = [];
+	}
+
+	put {
+		|index, control|
+		slots[index] = control;
+	}
+
+	at {
+		|index|
+		^slots[index]
+	}
+
+	addGroup {
+		|group|
+		var newGroups, overlapGroup;
+
+		if ((group.position < 6) and: {(group.position + group.span) > 6}) {
+			this.addGroup(ElectraGroupDef(group.name, group.position, 6 - group.position), group.color);
+			this.setGroup(ElectraGroupDef(group.name, 6, group.span - (6 - group.position), group.color));
+		} {
+			overlapGroup = groups.detect({
+				|otherGroup|
+				group.overlaps(otherGroup)
+			});
+			if (overlapGroup.notNil)
+			{
+				"Group [%-%] overlaps with other group [%-%]".format(
+					group.position, group.position + group.span,
+					overlapGroup.position, overlapGroup.position + overlapGroup.span
+				).error
+			} {
+				groups = groups.add(group);
+			};
+		};
+	}
+}
+
+ElectraPage : ElectraDefBase {
+	const <pageCount=12, <pageSize=36;
+	var <>banks, <>id, <>name="";
+
+	*new {
+		|id|
+		^super.new.id_(id)
+	}
+
+	ignoreFields { ^[\banks] }
+
+	init {
+		banks = [
+			ElectraBank(),
+			ElectraBank(),
+			ElectraBank(),
+		]
+	}
+
+	controlDicts {
+		var controls;
+		controls = banks.collect {
+			|bank, i|
+			bank.slots.collect {
+				|slot, j|
+				slot !? {
+					slot.toDict.putAll((
+						id: 1 + (id * pageSize) + (i * bank.slots.size) + j
+					))
+				};
+			}
+		};
+		controls = controls.flatten.reject(_.isNil);
+		^controls
+	}
+
+	groupDicts {
+		var groups;
+		groups = banks.collect {
+			|bank, i|
+			bank.groups.collect {
+				|group|
+				group = group.toDict;
+				group.putAll((
+					id: 1 + (id * pageCount) + (group.position),
+					position: (i * ElectraBank.bankSize) + group[\position],
+					pageId: 1 + id
+				))
+			}
+		};
+		^groups.flatten;
+	}
+
+	toDict {
+		^super.toDict.putAll((
+			id: 1 + id
+		))
+	}
+}
+
+ElectraPreset : ElectraDefBase {
+	var <>pages, <>name="";
+
+	init {
+		pages = 12.collect(ElectraPage(_))
+	}
+
+	toDict {
+		var dict = (
+			version: 1,
+			name: name,
+			projectId: "9030e9bd-c421-4f3d-8225-3ea6f8e86e7a",
+			pages: [],
+			controls: [],
+			groups: [],
+			devices: [],
+			overlays: [],
+			messages: [],
+		);
+
+		dict[\pages] = pages.collect(_.toDict());
+		dict[\controls] = pages.collect(_.controlDicts).flatten;
+		dict[\groups] = pages.collect(_.groupDicts).flatten;
+		dict[\devices] = 16.collect {
+			|i|
+			(
+				id: 1 + i,
+				name: "Generic MIDI",
+				instrumentId: "generic-midi",
+				port: 1 + (i / 8).asInteger,
+				channel: 1 + (i % 8)
+			)
+		};
+		dict[\controls].do {
+			|control|
+			var index;
+			if (control[\overlay].isEmpty.not) {
+				index = dict[\overlays].indexOf(control[\overlay]);
+				if (index.isNil) {
+					index = dict[\overlays].size;
+					dict[\overlays] = dict[\overlays].add(control[\overlay]);
+				};
+				control[\overlayId] = 1 + index;
+			} {
+				control[\overlayId] = nil
+			};
+			control[\overlay] = nil;
+		};
+		dict[\overlays] = dict[\overlays].collect {
+			|overlay, index|
+			overlay.toDict.putAll((
+				id: 1 + index
+			))
+		};
+
+		^dict
+	}
+
+	toSysexBytes {
+		|json|
+		var header, footer, bytes;
+
+		header = Int8Array[0xF0, 0x7D, 0x01, 0x01];
+		footer = Int8Array[-9];
+
+		bytes = Int8Array.newClear(json.size);
+		json.do {
+			|c, i|
+			bytes[i] = c.ascii
+		};
+		bytes = header ++ bytes ++ footer;
+		^bytes;
+	}
+
+	sendSysex {
+		|midiOut, json|
+		json = json ?? { this.toDict.toJSON };
+		midiOut.sysex(this.toSysexBytes(json));
+	}
+}
+
+ElectraFactory {
+	classvar <overlayCache, <>overlaySteps=64;
+
+	*initClass {
+		overlayCache = Dictionary();
+	}
+
+	*load {
+		|cve|
+		var midi = MIDIOut.newByName("Electra Controller", "Electra CTRL");
+		this.newFrom(cve).sendSysex(midi);
+	}
+
+	*newFrom {
+		|cve|
+		var groups, groupItems, groupOrder, defaultGroup, preset, index;
+
+		defaultGroup = '';
+		groups = ();
+		groupItems = ();
+		preset = ElectraPreset();
+		index = 0;
+
+		cve.do {
+			|cv|
+			var group = cv.md[\group] ?? { cve.name.asSymbol } ?? { defaultGroup };
+			if (group.isKindOf(Symbol)) { group = (name: group) };
+			group[\color] = group[\color] ?? { cve.color };
+			groups[group[\name]] = group;
+			groupItems[group[\name]] = groupItems[group[\name]].add(cv);
+		};
+
+		groups = groups.asArray.sort({
+			|a, b|
+			(a[\order] ?? 99999) < (b[\order] ?? 99999)
+		});
+
+		groups.do {
+			|group|
+			var items = groupItems[group[\name]];
+
+			items = items.sort({
+				|a, b|
+				(a.md[\order] ?? 99999) > (b.md[\order] ?? 99999)
+			});
+
+			index = this.addToPreset(index, preset, group, items);
+		};
+
+		^preset
+	}
+
+	*addToPreset {
+		|index, preset, group, items|
+		var page, pageIndex, bank, bankIndex, controlDef, leftoverItems;
+
+		if (items.size > ElectraBank.bankSize) {
+			leftoverItems = items[ElectraBank.bankSize..];
+			items = items[0..(ElectraBank.bankSize-1)];
+		};
+
+		page = (index / ElectraPage.pageSize).asInteger;
+		pageIndex = index - (page * ElectraPage.pageSize);
+		bank = (pageIndex / ElectraBank.bankSize).asInteger;
+		bankIndex = pageIndex - (bank * ElectraBank.bankSize);
+
+		if (bankIndex.odd) { bankIndex = bankIndex + 1 };
+
+		if ((items.size + bankIndex) > ElectraBank.bankSize) {
+			bank = bank + 1;
+			bankIndex = 0;
+			pageIndex = bank * ElectraBank.bankSize;
+			if (bank >= ElectraBank.bankCount) {
+				page = page + 1;
+				pageIndex = 0;
+				bank = 0;
+				bankIndex = 0;
+			};
+
+			index = (page * ElectraPage.pageSize) + pageIndex;
+		};
+
+		items.do {
+			|item, slotIndex|
+
+			// We want top-to-bottom ordering, not left-to-right as our data scructure stores them.
+			slotIndex = this.convertBankIndex(bankIndex + slotIndex);
+			controlDef = this.makeDef(item, group, index);
+			preset.pages[page].banks[bank][slotIndex] = controlDef;
+
+			index = index + 1;
+		};
+
+		preset.pages[page].banks[bank].addGroup(
+			ElectraGroupDef(
+				name: 		group.name,
+				position: 	this.convertBankIndex(bankIndex),
+				span: 		(items.size / 2).ceil.asInteger,
+				color: 		group.color ?? { Color.blue }
+			)
+		);
+
+		if (leftoverItems.size > 0) {
+			^this.addToPreset(index, preset, group, items)
+		} {
+			^index
+		}
+	}
+
+	*makeDef {
+		|cv, group, index|
+		var minimumVisibleRange = 20;
+		var smallRange, largeRange, nonLinear;
+		var specRange, controlDef, overlayLabel, overlayUnits;
+
+		controlDef = ElectraFaderDef();
+		controlDef.name = cv.name;
+
+		specRange = cv.spec.maxval.absdif(cv.spec.minval);
+
+		smallRange = (specRange < minimumVisibleRange) && (cv.spec.step < 1.0);
+		largeRange = specRange >= 512;
+		nonLinear = cv.spec.warp.isKindOf(LinearWarp).not;
+
+		if (cv.md[\overlay].asBoolean) {
+			controlDef.min = 0;
+			controlDef.max = overlaySteps;
+			controlDef.overlay = this.makeOverlay(overlaySteps, cv.spec);
+
+		} {
+			if (cv.md[\showNumbers].asBoolean.not || smallRange || largeRange || nonLinear) {
+				controlDef.min = 0;
+				controlDef.max = 128*128-1;
+			} {
+				controlDef.min = cv.spec.minval.round.asInteger;
+				controlDef.max = cv.spec.maxval.round.asInteger;
+			}
+		};
+
+		controlDef.color = cv.color ?? { group.color } ?? { Color.white };
+		controlDef.parameter = ElectraCC14ParamDef(index % 32, (index / 32).asInteger);
+
+		if (cv.respondsTo('cc14_')) {
+			cv.cc14_(
+				controlDef.parameter.parameterId,
+				controlDef.parameter.channel,
+				controlDef.parameter.endpoint(true).uid,
+				broadcast:true
+			)
+		};
+
+
+		^controlDef
+	}
+
+	*makeOverlay {
+		|steps, spec|
+		var overlayLabel, overlayUnits;
+		var overlay = overlayCache[spec];
+		var specRange = spec.maxval.absdif(spec.minval);
+
+		if (overlay.isNil) {
+			overlay = ElectraOverlayDef();
+
+			if (spec.tryPerform(\units).size > 0) {
+				overlayUnits = " " ++ spec.units.stripWhiteSpace;
+			} {
+				overlayUnits = ""
+			};
+
+			(0..steps).do {
+				|i|
+				overlayLabel = spec.map(i / steps.asFloat);
+				if (specRange.log10 > 3) {
+					overlayLabel = overlayLabel.round(1).asStringPrec(1000);
+				} {
+					overlayLabel = overlayLabel.round(10.pow(specRange.log10.floor.max(0) - 3)).asString
+				};
+				overlay[i] = overlayLabel ++ overlayUnits;
+			};
+
+			overlayCache[spec] = overlay;
+		};
+
+		^overlay
+	}
+
+	*convertBankIndex {
+		|index|
+		^(
+			// should be [0, 6, 1, 7, 2, 8, 3, 9, ...]
+			((index % 2) * 6) + (index / 2).floor.asInteger;
+		)
+	}
+}
+
++Range {
+	overlaps {
+		|other|
+		^(
+			this.includes(other.start)
+			or: {
+				this.includes(other.end - 1)
+			}
+			or: {
+				other.includes(this.start)
+			}
+			or: {
+				other.includes(this.end - 1)
+			}
+		)
+	}
+}

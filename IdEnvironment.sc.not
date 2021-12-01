@@ -1,0 +1,75 @@
+IdEnvironment : Environment {
+	classvar <globalKeyOverrides, <globalClassOverrides;
+	var keyOverrides, classOverrides;
+
+	*initClass {
+		globalKeyOverrides = IdentityDictionary();
+		globalClassOverrides = IdentityDictionary();
+
+		globalClassOverrides[Node] = { |old| old.free };
+		globalClassOverrides[Bus] = { |old| old.free };
+		globalClassOverrides[Buffer] = { |old| old.free };
+	}
+
+	*onReplace {
+		|item, action|
+		case
+		{ item.isKindOf(Symbol) } { keyOverrides[item] = action }
+		{ item.isKindOf(Class) } { classOverrides[item] = action }
+	}
+
+	*new {
+		|...args|
+		^super.new(*args).init
+	}
+
+	init {
+		keyOverrides = IdentityDictionary();
+		classOverrides = IdentityDictionary();
+	}
+
+	onReplace {
+		|item, action|
+		case
+		{ item.isKindOf(Symbol) } { keyOverrides[item] = action }
+		{ item.isKindOf(Class) } { classOverrides[item] = action }
+	}
+
+	put {
+		|key, value|
+		this.doReplace(key, value);
+		^super.put(key, value);
+	}
+
+	putGet {
+		|key, value|
+		this.doReplace(key, value);
+		^super.putGet(key, value);
+	}
+
+	clear {
+		this.keysValuesDo {
+			|key|
+			this.doReplace(key, nil);
+		};
+
+		^super.clear;
+	}
+
+	doReplace {
+		|key, newValue|
+		var oldValue = this[key];
+		var action;
+		if ((action = keyOverrides[key]).isNil) {
+			if ((action = classOverrides[oldValue.class]).isNil) {
+				if ((action = super.keyOverrides[key]).isNil) {
+					action = super.classOverrides[oldValue.class]
+				}
+			}
+		};
+
+		action.(oldValue, newValue)
+	}
+
+
+}

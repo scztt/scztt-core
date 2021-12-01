@@ -1,0 +1,489 @@
+Sig {
+	classvar <>warnOnRecursion=true;
+	var connections, notifying=false, deferredActions;
+
+	*new {
+		^super.new.init
+	}
+
+	init {
+		deferredActions = List(0);
+	}
+
+	notify {
+		|who, value|
+
+		if (notifying.not) {
+			notifying = true;
+
+			{
+				connections.do {
+					|conn|
+					conn.notify(this, who, value);
+				}
+			}.protect({
+				notifying = false;
+				while { deferredActions.notEmpty } {
+					deferredActions.pop.value();
+				}
+			})
+		} {
+			if (warnOnRecursion) {
+				"Signal recursion detected!".warn;
+				this.dumpBackTrace();
+			}
+		}
+	}
+
+	addConnection {
+		|connection|
+		if (notifying) {
+			deferredActions.add({ this.addConnection(connection) });
+		} {
+			connections = connections ?? { IdentitySet() };
+			connections.addAll(connection.asArray);
+		}
+	}
+
+	removeConnection {
+		|connection|
+		if (notifying) {
+			deferredActions.add({ this.removeConnection(connection) });
+		} {
+			connections.removeAll(connection.asArray);
+		}
+	}
+
+	removeAllConnections {
+		if (notifying) {
+			deferredActions.add({ this.removeAllConnections() });
+		} {
+			connections.clear();
+		}
+	}
+
+	>+ {
+		|connection|
+		this.addConnection(connection);
+	}
+
+	>- {
+		|connection|
+		this.removeConnection(connection);
+	}
+}
+
+NamedSig : Sig {
+	var <>name;
+
+	*new {
+		|name|
+		^super.new.init.name_(name);
+	}
+
+	notify {
+		|value|
+		^super.notify(name, value);
+	}
+}
+
+ObjectSig : Sig {
+	var <parent;
+
+	*new {
+		|parent|
+		^super.newCopyArgs().init(parent);
+	}
+
+	init {
+		|inParent|
+		parent = inParent;
+		^super.init;
+	}
+
+	notify {
+		|value|
+		^super.notify(parent, value);
+	}
+}
+
+GlobalSigs : Sig {
+	classvar objDict, objNameDict;
+
+	*initClass {
+		objDict = SigDict();
+		objNameDict = IdentityDictionary();
+	}
+
+	*forObject {
+		|obj|
+		^objDict.at(obj)
+	}
+
+	*forObjectName {
+		|obj, name|
+		var objDict = objNameDict.atFail(obj, {
+			var new = SigDict();
+			objNameDict[obj] = new;
+			new;
+		});
+
+		^objDict[name]
+	}
+
+	*disconnectForObject {
+		|obj|
+		objDict[obj].removeAllConnections();
+		objNameDict[obj].do {
+			|sig|
+			sig.removeAllConnections();
+		}
+	}
+}
+
+GlobalSlots {
+	classvar objNameDict;
+
+	*initClass {
+		objNameDict = IdentityDictionary();
+	}
+
+	*forObjectName {
+		|obj, name, createFunc, argOrder|
+		var fullName, objDict;
+
+		objDict = objNameDict.atFail(obj, {
+			var new = IdentityDictionary();
+			objNameDict[obj] = new;
+			new;
+		});
+
+		argOrder = argOrder ?? [];
+		fullName = "%(%)".format(name, argOrder).asSymbol;
+
+		^objDict.atFail(fullName, {
+			var newSlot = MethodSlot(obj, name, *argOrder);
+			objDict[fullName] = newSlot;
+			newSlot;
+		});
+	}
+
+	*disconnectForObject {
+		|obj|
+		objNameDict[obj].do {
+			|sig|
+			sig.removeAllConnections();
+		}
+	}
+}
+
+Slot {
+	var connected = false;
+
+	connect {
+		connected = true;
+	}
+
+	disconnect {
+		connected = false;
+	}
+
+	disconnectWith {
+		|func|
+		var wasConnected = connected;
+
+		this.disconnect();
+		^func.protect({
+			if (wasConnected) {
+				this.connect();
+			}
+		});
+	}
+
+	remove {
+		// ??
+	}
+
+	notify {
+		this.subclassResponsibility;
+	}
+
+	collecting {
+		^CollectingSlot(this);
+	}
+
+	deferred {
+		|clock, forceDefer=false|
+		^DeferredSlot(this, clock, forceDefer);
+	}
+
+	collapsed {
+		|delay, clock, forceDefer=false|
+		^CollapsedSlot(this, delay, clock, forceDefer);
+	}
+}
+
+CollectingSlot : Slot {
+	var <messages, child;
+
+	*new {
+		|otherSlot|
+		^super.new.init(otherSlot);
+	}
+
+	init {
+		|otherSlot|
+		child = otherSlot;
+		messages = List();
+	}
+
+	notify {
+		|what, who, value|
+		messages.add([what, who, value]);
+	}
+
+	release {
+		var tmpMessages = messages.copy();
+		messages.clear;
+
+		tmpMessages.do {
+			|msg|
+			child.notify(*msg);
+		}
+	}
+
+	releaseLast {
+		var lastMsg;
+		if (messages.notEmpty) {
+			lastMsg = messages.last;
+			messages.clear();
+
+			child.notify(*lastMsg);
+		}
+	}
+
+	clear {
+		messages.clear();
+	}
+}
+
+DeferredSlot : Slot {
+	var <child, <clock, <forceDefer;
+
+	*new {
+		|otherSlot, clock, forceDefer=true|
+		^super.new.init(otherSlot, clock, forceDefer);
+	}
+
+	init {
+		|otherSlot, inClock, inForceDefer|
+		child = otherSlot;
+		clock = inClock ?? AppClock;
+		forceDefer = inForceDefer;
+	}
+
+	notify {
+		|what, who, value|
+		if (forceDefer.not && (thisThread.clock == clock)) {
+			child.notify(what, who, value)
+		} {
+			clock.sched(0, {
+				child.notify(what, who, value)
+			});
+		}
+	}
+}
+
+CollapsedSlot : Slot {
+	var <child, <clock, <forceDefer, <delay;
+	var <lastValue, scheduled=false;
+
+	*new {
+		|otherSlot, delay, clock, forceDefer=true|
+		^super.new.init(otherSlot, delay, clock, forceDefer);
+	}
+
+	init {
+		|otherSlot, inDelay, inClock, inForceDefer|
+		child = otherSlot;
+		clock = inClock ?? AppClock;
+		forceDefer = inForceDefer;
+		delay = inDelay ?? 0;
+
+		CmdPeriod.add(this);
+	}
+
+	notify {
+		|what, who, value|
+		lastValue = [what, who, value];
+
+		if (scheduled.not) {
+			scheduled = true;
+
+			clock.sched(delay, {
+				var notifyValue = lastValue;
+				lastValue = nil;
+				scheduled = false;
+
+				child.notify(*notifyValue);
+			});
+		}
+	}
+
+	doOnCmdPeriod {
+		lastValue = nil;
+		scheduled = false;
+	}
+}
+
+MethodSlot : Slot {
+	var object, methodName, <notifyFunc;
+
+	*new {
+		|object, methodName ...argOrder|
+		^super.new.init(object, methodName, argOrder);
+	}
+
+	init {
+		|inObject, inMethodName, argOrder|
+		var argString;
+
+		object = inObject;
+		methodName = inMethodName;
+
+		if (object.respondsTo(methodName).not && object.tryPerform(\know).asBoolean.not) {
+			Exception("Object of type % doesn't respond to %.".format(object.class, methodName)).throw;
+		};
+
+		if (argOrder.isEmpty) {
+			argOrder = [\what, \who, \value];
+		};
+
+		argString = argOrder.collect(_.asString).join(", ");
+		notifyFunc = "{ |object, what, who, value| object.%(%) }".format(methodName, argString).interpret;
+		connected = true;
+	}
+
+	notify {
+		|what, who, value|
+		notifyFunc.value(object, what, who, value);
+	}
+}
+
+SetterSlot : MethodSlot {
+	*new {
+		|obj, methodName...argOrder|
+		^super.new(obj, methodName.asSetter, *argOrder);
+	}
+}
+
+ValueSlot : SetterSlot {
+	*new {
+		|obj ...argOrder|
+		^super.new(obj, \value, *argOrder);
+	}
+}
+
+FunctionSlot : MethodSlot {
+	*new {
+		|function ...argOrder|
+		^super.new(function, \value, *argOrder);
+	}
+}
+
+SigDict : IdentityDictionary {
+	var <>createFunc;
+
+	prCreateSig {
+		|name|
+
+		if (createFunc.notNil) {
+			^createFunc.value(name)
+		} {
+			^NamedSig(name)
+		}
+	}
+
+	at {
+		|key|
+		var sig = super.at(key);
+		if (sig.isNil) {
+			super.put(key, sig = this.prCreateSig(key))
+		};
+
+		^sig
+	}
+
+	put { arg key, value;
+		var oldVal = this.at(key);
+		if ((value != oldVal) && oldVal.notNil) {
+			oldVal.removeAllConnections();
+		};
+
+		^super.put(key, value);
+	}
+
+	putGet { arg key, value;
+		var oldVal = this.at(key);
+		this.put(key, value);
+		^oldVal;
+	}
+}
+
++Function {
+	adaptArgs {
+		|...inArgs|
+		var funcArgsString, inArgsString;
+		var funcArgs = this.def.argNames;
+		var metaFunc;
+
+		inArgsString = inArgs.collect(_.asString).join(", ");
+		funcArgs = funcArgs.select { |a| inArgs.indexOf(a).notNil };
+		funcArgsString = funcArgs.collect {
+			|funcArg|
+			"%: %".format(funcArg.asString, funcArg.asString)
+		}.join(", ");
+
+		metaFunc = "{ |func| { |%| func.value(%) } }".format(inArgsString, funcArgsString).interpret;
+
+		^metaFunc.value(this);
+	}
+}
+
++Object {
+	sig {
+		|name|
+		if (name.isNil) {
+			^GlobalSigs.forObject(this);
+		} {
+			^GlobalSigs.forObjectName(this, name);
+		}
+	}
+
+	slot {
+		|name, createFunc, argOrder|
+		^GlobalSlots.forObjectName(this, name, createFunc, argOrder);
+	}
+
+	valueSlot {
+		|name, createFunc|
+		^GlobalSlots.forObjectName(this, name, createFunc, [\value]);
+	}
+
+	setterSlot {
+		|name, createFunc|
+		^GlobalSlots.forObjectName(this, name.asSetter, createFunc, [\value]);
+	}
+
+	disconnectSigs {
+		GlobalSigs.disconnectForObject(this);
+	}
+}
+
++Nil {
+	sig {
+		Error("Cannot create a signal for Nil").throw;
+	}
+}
+
+

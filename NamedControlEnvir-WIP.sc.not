@@ -1,0 +1,215 @@
+SynthDefEnvironment : Singleton {
+	var <rate, <spec, <namedControl;
+
+	*new {
+		|name, spec, rate, lag, default|
+		^super.new(name, spec, rate, lag, default)
+	}
+
+	init {
+		|name|
+
+	}
+
+	set {
+		|inSpec, inRate, inLag, inDefault|
+		this.spec = inSpec;
+		this.rate = inRate;
+		this.lag = inLag;
+		this.default = inDefault;
+	}
+
+	lag { ^lag ? 0 }
+	lag_{
+		|inLag|
+		if (lag.notNil and: { lag != inLag }) {
+			"Overwriting lag for NamedControl(%) (% -> %)".format(
+				"\\" ++ name,
+				lag, inLag
+			).warn;
+		};
+
+		lag = inLag;
+
+		namedControl !? {
+			namedControl.lags = this.lag;
+		}
+	}
+
+	spec { ^spec.asSpec }
+	spec_{
+		|inSpec|
+		if (spec.notNil and: { spec != inSpec }) {
+			"Overwriting spec for NamedControl(%)".format("\\" ++ name).warn;
+		};
+
+		spec = inSpec;
+		if (default.notNil) {
+			spec.default = default;
+		};
+
+		namedControl !? {
+			namedControl.spec = this.spec
+		}
+	}
+
+	rate { ^rate ?? { \control }}
+	rate_{
+		|inRate|
+		if (rate.notNil and: { rate != inRate }) {
+			"Overwriting rate for NamedControl(%) (% -> %)".format(
+				"\\" ++ name,
+				rate, inRate
+			).warn;
+		};
+
+		rate = inRate;
+	}
+
+	kr {
+		this.rate = \control;
+		^namedControl;
+	}
+
+	ar {
+		this.rate = \audio;
+		^namedControl;
+	}
+
+	prCreateNamedControl {
+		namedControl ?? {
+			namedControl = NamedControl(
+				name: name,
+				values: this.default,
+				rate: rate,
+			)
+		}
+	}
+}
+
++NamedControl {
+	control_{
+		|ugen|
+		control = ugen;
+	}
+
+	*new { arg name, values, rate, lags, fixedLag = false, spec;
+		var res;
+
+		this.initDict;
+
+		name = name.asSymbol;
+
+		if (spec.notNil) {
+			spec = spec.asSpec;
+
+			if (values.isNil) {
+				values = spec.default;
+			};
+		};
+
+		res = currentControls.at(name);
+
+		lags = lags.deepCollect(inf, {|elem|
+			if (elem == 0) { nil } { elem }
+		});
+
+		if (lags.rate == \scalar) {
+			fixedLag = true;
+		};
+
+		if(res.isNil) {
+			values = (values ? 0.0).asArray;
+			res = super.newCopyArgs(name, values, lags, rate, fixedLag).init;
+			currentControls.put(name, res);
+		} {
+			values = (values ? res.values).asArray;
+			if(res.values != values) {
+				Error("NamedControl: cannot have more than one set of "
+					"default values in the same control.").throw;
+			};
+			if(rate.notNil and: { res.rate != rate }) {
+				Error("NamedControl: cannot have  more than one set of "
+					"rates in the same control.").throw;
+			};
+
+		};
+
+		if(res.fixedLag and: lags.notNil) {
+			if( res.lags != lags ) {
+				Error("NamedControl: cannot have more than one set of "
+					"fixed lag values in the same control.").throw;
+			} {
+				^res.control;
+			}
+		};
+
+		if(spec.notNil) {
+			res.spec = spec; // Set after we've finished without error.
+		};
+
+		^if(lags.notNil) {
+			res.control.lag(lags).unbubble
+		} {
+			res.control
+		}
+	}
+
+	init {
+		var prefix, str;
+
+		name !? {
+			str = name.asString;
+			if(str[1] == $_) { prefix = str[0] };
+		};
+
+		if(fixedLag && lags.notNil && prefix.isNil) {
+			buildSynthDef.addKr(name, values.unbubble);
+			if(rate === \audio) {
+				control = LagControl.ar(values.flat.unbubble, lags)
+			} {
+				control = LagControl.kr(values.flat.unbubble, lags)
+			};
+		} {
+			if(prefix == $a or: {rate === \audio}) {
+				buildSynthDef.addAr(name, values.unbubble);
+				control = AudioControl.ar(values.flat.unbubble);
+
+			} {
+				if(prefix == $t or: {rate === \trigger}) {
+					buildSynthDef.addTr(name, values.unbubble);
+					control = TrigControl.kr(values.flat.unbubble);
+				} {
+					if(prefix == $i or: {rate === \scalar}) {
+						buildSynthDef.addIr(name, values.unbubble);
+						control = Control.ir(values.flat.unbubble);
+					} {
+						buildSynthDef.addKr(name, values.unbubble);
+						control = Control.kr(values.flat.unbubble);
+					}
+				}
+			};
+		};
+
+		control = control.asArray.reshapeLike(values).unbubble;
+	}
+
+	*initDict {
+		if(UGen.buildSynthDef !== buildSynthDef or: currentControls.isNil) {
+			buildSynthDef = UGen.buildSynthDef;
+			currentControls = IdentityDictionary.new;
+		};
+	}
+
+	spec {
+		^UGen.buildSynthDef.specs[name]
+	}
+
+	spec_{
+		|spec|
+		spec = spec.asSpec;
+		this.spec !? _.setFrom(spec) ?? {
+			UGen.buildSynthDef.specs[name] = spec
+		};
+	}
+}

@@ -1,0 +1,393 @@
+MAS : Singleton {
+	classvar <>vstPath="/Library/Audio/Plug-Ins/VST/Maschine 2.vst";
+	classvar <>eventLatency = 0.036, <>pluginLatency = 0.1, <>playerTick=0.25;
+	classvar pluginCount=0;
+
+	var <programPath, <synth, <controller,
+	<channels=2, <out=0, <in, loadedAction;
+
+	var groups, groupHashes, groupDurs, baseOSCPort=57400, pluginIndex=0;
+	var player, addr;
+
+	*initClass {
+		SynthDef(\maschine_2, {
+			var sig, in;
+
+			in = \in.ar(0 ! 2);
+
+			sig = VSTPlugin.ar(in, 2);
+			sig = DelayN.ar(sig, 8, \latency.kr(0));
+			sig = \amp.kr(1) * sig;
+
+			Out.ar(\out.ar(0), sig)
+		}).add;
+
+		SynthDef(\maschine_16, {
+			var sig, in;
+
+			in = \in.ar(0 ! 16);
+
+			sig = VSTPlugin.ar(in, 16);
+			sig = DelayN.ar(sig, 8, \latency.kr(0));
+			sig = \amp.kr(1) * sig;
+
+			Out.ar(\out.ar(0), sig)
+		}).add;
+
+		Class.initClassTree(Event);
+		this.registerEvents();
+	}
+
+	*registerEvents {
+		EventTypesWithCleanup.cleanupTypes[\maschine] = \masStop;
+
+		Event.addEventType(\masStop, {
+			if (~maschine.isKindOf(Symbol)) { ~maschine = MAS(~maschine) };
+
+			~maschine.controller !? {
+				|c|
+				c.setPlaying(false);
+				c.notes.do(_.do({ |n| n.do { |n| n.free } }));
+				c.parameterBuses.do(_.free);
+			}
+		}, (
+			maschine: \default
+		));
+
+		Event.addEventType(\masScene, {
+			if (~maschine.isKindOf(Symbol)) { ~maschine = MAS(~maschine) };
+
+			~maschine.controller !? {
+				|c|
+				Server.default.sendBundle(
+					pluginLatency - 0.01,
+					c.midi.programMsg(0, ~scene)
+				)
+			}
+		}, (
+			maschine: \default,
+			scene: 0
+		));
+
+		Event.addEventType(\masSection, {
+			if (~maschine.isKindOf(Symbol)) { ~maschine = MAS(~maschine) };
+
+			~maschine.controller !? {
+				|c|
+				Server.default.sendBundle(
+					pluginLatency - 0.01,
+					c.midi.programMsg(1, ~section)
+				)
+			}
+		}, (
+			maschine: \default,
+			section: 0
+		));
+	}
+
+	*new {
+		|name, program, channels=2|
+		^super.new(name, program, channels)
+	}
+
+	init {
+		ServerQuit.add(this);
+		ServerBoot.add(this);
+
+		this.prInstantiate();
+		this.prSetupPlayer();
+
+		groups = Dictionary();
+		groupHashes = Dictionary();
+		groupDurs = Dictionary();
+	}
+
+	resend {
+		groups.keysValuesDo()
+	}
+
+	clear {
+		this.free;
+	}
+
+	oscPort {
+		^baseOSCPort + pluginIndex
+	}
+
+	set {
+		|path|
+		if (path != programPath) {
+			programPath = path;
+			this.prReloadProgram();
+		}
+	}
+
+	out_{
+		|bus|
+		out = bus;
+		synth !? _.set(\out, out)
+	}
+
+	setPatterns {
+		|...pairs|
+		pairs.pairsDo {
+			|key, value|
+			this.setPattern(
+				key[0],
+				key[1],
+				key[2] ? 16,
+				value
+			)
+		}
+	}
+
+	setPattern {
+		|groupName, patternName, dur, pattern|
+		var rendered, hash;
+
+		if (pattern.isNil) {
+			groups[[groupName, patternName]] = nil;
+			groupHashes[[groupName, patternName]] = nil;
+			// clear pattern
+		} {
+			rendered = this.prRender(pattern, dur);
+			hash = rendered.hash;
+
+			if (hash != groupHashes[[groupName, patternName]]) {
+				groups[[groupName, patternName]] = rendered;
+				groupHashes[[groupName, patternName]] = hash;
+				groupDurs[[groupName, patternName]] = dur;
+
+				this.prSendUpdate(groupName, patternName);
+			}
+		}
+	}
+
+	prSendUpdate {
+		|groupName, patternName|
+		addr = addr ?? { NetAddr("127.0.0.1", this.oscPort) };
+
+		groups[[groupName, patternName]].keysValuesDo {
+			|sound, pattern|
+
+			addr.sendMsg(*[
+				"/pattern/set",
+				groupName,  	// group
+				patternName,  	// pattern
+				sound,  		// sound
+				groupDurs[[groupName, patternName]], 			// length
+				pattern
+			].asOSCArgArray.postln)
+		}
+	}
+
+	prRender {
+		|pattern, dur=16|
+		var seq, notes, lastModValues, rendered;
+
+		seq = OSequence.from(pattern.asStream, dur);
+
+		lastModValues = ();
+		rendered = ();
+
+		notes = seq.do({
+			|event, time|
+			var params, paramKeys, sound;
+
+			sound = event[\sound] ?? { 0 };
+			if (sound.isKindOf(String)) {
+				sound = sound.asSymbol
+			};
+
+			params = ();
+			paramKeys = event.keys.select({
+				|key|
+				key = key.asString;
+				(key[0].isAlphaNum && key[1].isDecDigit);
+			});
+
+			paramKeys.do {
+				|key|
+				if (lastModValues[key] != event[key]) {
+					params[key] = event[key]
+				};
+				lastModValues[key] = event[key];
+			};
+
+			params = params.collect({
+				|value, key|
+				key = key.asString;
+				[
+					key[1..].asInteger,
+					value
+				]
+			}, Array).values.asArray;
+
+			rendered[sound] = rendered[sound] ?? {[]};
+			rendered[sound] = rendered[sound].add(
+				event.use {
+					[
+						time,
+						~midinote.value,
+						~sustain.value,
+						~velocity.value,
+						`params
+					].flop
+				}
+			);
+		}, Array);
+
+		rendered = rendered.collect(_.flatten(1));
+
+		^rendered
+	}
+
+	in_{
+		|bus|
+		in = bus;
+		in !? {
+			synth !? _.set(\in, in)
+		}
+	}
+
+	defName {
+		^switch(2, \maschine_2, 16, \maschine_16)
+	}
+
+	prSetupPlayer {
+		player.stop();
+		player = EventPatternProxy(
+			Pproto(
+				{
+					(type: \maschine, maschine:this).yield;
+				},
+				Pbind(
+					\maschine,  this,
+					\time, 		Ptime(),
+					\dur, 		Pkey(\tickDur),
+					\play, {
+						~maschine.controller !? {
+							|c|
+							Server.default.sendBundle(
+								pluginLatency,
+								c.setTempoMsg(120 * (~tempo ? 1)),
+								c.setTimeSignatureMsg(~timeSig[0], ~timeSig[1]),
+								c.setPlayingMsg(true),
+								c.setTransportPosMsg((~time * 4)),
+							)
+						}
+					}
+				)
+			)
+		).envir_((
+			tickDur: 1/4,
+			timeSig: [4, 4],
+			tempo: 1
+		))
+	}
+
+	prReloadProgram {
+		controller !? {
+			if (programPath.notNil) {
+				controller.readProgram(programPath)
+			} {
+				controller.reset()
+			}
+		} ?? {
+			this.prInstantiate();
+		}
+	}
+
+	prInstantiate {
+		if (Server.default.serverBooting or: {
+			Server.default.hasBooted && Server.default.serverRunning.not
+		}) {
+			Server.default.waitForBoot { this.prInstantiate() };
+			^this;
+		};
+
+		if (synth.isNil) {
+			controller = nil;
+
+			synth = Synth(this.defName, [
+				\out, out,
+				\in, in,
+				\latency, 0.1
+			]);
+
+			synth.onFree({
+				synth = nil;
+				controller = nil;
+			});
+
+			fork {
+				Server.default.sync;
+
+				pluginIndex = pluginCount;
+				pluginCount = pluginCount + 1;
+
+				controller = VSTPluginController(synth);
+				controller.open(
+					vstPath,
+					editor:true,
+					action: {
+						this.prReloadProgram();
+						loadedAction.value;
+						loadedAction = nil;
+					}
+				)
+			}
+		}
+	}
+
+	free {
+		controller !? _.close;
+		synth !? _.free;
+		synth = controller = nil;
+	}
+
+	editor {
+		synth !? {
+			controller !? _.editor() ?? {
+				loadedAction = loadedAction.addFunc {
+					controller.editor()
+				}
+			}
+		}
+	}
+
+	// SETTERS
+	tickDur { 		^player.get(\tickDur) }
+	tickDur_{ |val| ^player.set(\tickDur, val) }
+
+	timeSig { 		^player.get(\timeSig) }
+	timeSig_{ |val| ^player.set(\timeSig, val) }
+
+	scene { 		^player.get(\scene) }
+	scene_{ |val| 	^player.set(\scene, val) }
+
+	section { 		^player.get(\section) }
+	section_{ |val| ^player.set(\section, val) }
+
+	// EVENTS
+	doOnServerBoot {
+	}
+
+	doOnServerTree {
+		this.prInstantiate();
+	}
+
+	doOnServerQuit {
+		controller = nil;
+		synth = nil;
+	}
+
+	play {
+		player.play();
+	}
+
+	stop {
+		player.stop();
+	}
+}
+

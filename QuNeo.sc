@@ -1,7 +1,7 @@
 
 QuNeo {
 	var midiIn, midiOut,
-	<>pads;
+	<>pads, connections;
 
 	*new {
 		| midiOut, midiIn |
@@ -27,21 +27,18 @@ QuNeo {
 			|i|
 			var padDevice, pad;
 			padDevice = QuNeoPadDevice(
-				midiInUid: midiIn.uid,
-				midiOut: midiOut,
-				note: i + 36,
-				pres: (i * 3) + 23,
-				x: (i * 3) + 23 + 1,
-				y: (i * 3) + 23 + 2,
-				padRed: (i * 2),
-				padGreen: (i * 2) + 1,
-				channel: 0
+				midiInUid: 	midiIn.uid,
+				midiOut: 	midiOut,
+				note: 		i + 36,
+				pres: 		(i * 3) + 23,
+				x: 			(i * 3) + 23 + 1,
+				y: 			(i * 3) + 23 + 2,
+				padRed: 	(i * 2),
+				padGreen: 	(i * 2) + 1,
+				channel: 	0
 			);
 			pad = QuNeoPad(padDevice).default();
 		};
-
-		// We want rows top-to-bottom, so flop around:
-		pads = pads.clump(4).reverse.flatten;
 	}
 
 	padRows {
@@ -55,11 +52,25 @@ QuNeo {
 	}
 
 	connect {
-		pads.do(_.connect);
+		connections = ConnectionList();
+
+		pads.do {
+			|pad, i|
+			pad.connect();
+			connections.addAll([
+				pad.signal(\xypres).connectTo(
+					this.methodSlot("changed(\\xypres, %, object, *args)".format(i))),
+				pad.signal(\on).connectTo(
+					this.methodSlot("changed(\\on, %, object, *args)".format(i))),
+				pad.signal(\off).connectTo(
+					this.methodSlot("changed(\\off, %, object, *args)".format(i)))
+			]);
+		}
 	}
 
 	disconnect {
 		pads.do(_.disconnect);
+		connections.free.clear;
 	}
 
 	free {
@@ -80,38 +91,52 @@ QuNeoInput {
 }
 
 QuNeoPad : QuNeoInput {
+	var parent;
+
 	var <lit = false,
 	<noteOnActions, <noteOffActions,
 	defaultNoteCV, defaultPresCV, defaultXYCV,
-	noteCV, xCV, yCV, presCV,
+	noteCV, xCV, yCV, presCV, noteC,
 	<>toggle = false, toggleState = false;
+
+	var <events;
 
 	init {
 		| mode |
-		defaultNoteCV = CV(ControlSpec(0, 1));
-		defaultNoteCV.action_({
-			arg cv;
-			if (cv.value.value > 0) {
-				this.lit_(true);
-			} {
-				this.lit_(false);
-			}
-		});
+		defaultNoteCV = NumericControlValue(spec:ControlSpec(0, 1));
+		defaultPresCV = NumericControlValue(spec:ControlSpec(0, 1));
+		defaultXYCV = NumericControlValue(spec:ControlSpec(-1, 1));
 
-		defaultPresCV = CV(ControlSpec(0, 1));
-		defaultXYCV = CV(ControlSpec(-1, 1));
+		this.connectOnNoteChanged(defaultNoteCV);
 
 		noteOnActions = Set();
 		noteOffActions = Set();
+
+		events = ();
 
 		^super.init(mode);
 	}
 
 	default {
-		this.noteCV = defaultNoteCV;
-		this.presCV = defaultPresCV;
-		this.xCV = defaultXYCV;
-		this.yCV = defaultXYCV;
+		this.noteCV 	= defaultNoteCV.copy;
+		this.presCV 	= defaultPresCV.copy;
+		this.xCV 		= defaultXYCV.copy;
+		this.yCV		= defaultXYCV.copy;
+	}
+
+	connectOnNoteChanged {
+		|cv|
+		noteC !? { noteC.free };
+		noteC = cv.signal(\input).connectTo(this.methodSlot("onNoteChanged(value)"))
+	}
+
+	onNoteChanged {
+		|value|
+		if (value > 0) {
+			this.lit_(true);
+		} {
+			this.lit_(false);
+		}
 	}
 
 	mode_{}
@@ -119,26 +144,28 @@ QuNeoPad : QuNeoInput {
 	connect {
 		connected = true;
 
-		device.noteOnFunc = { |val| this.onNoteEvent(true, val / 127) };
-		device.noteOffFunc = { |val| this.onNoteEvent(false, val / 127) };
+		device.noteOnFunc 	= { |val| this.onNoteEvent(true, val / 127) };
+		device.noteOffFunc 	= { |val| this.onNoteEvent(false, val / 127) };
 
-		device.presFunc = { |val| this.onCCEvent(presCV, val / 127) };
-		device.xFunc = { |val| this.onCCEvent(xCV, val / 127) };
-		device.yFunc = { |val| this.onCCEvent(yCV, val / 127) };
+		device.presFunc 	= { |val| this.onCCEvent(\pressure, presCV, val / 127) };
+		device.xFunc 		= { |val| this.onCCEvent(\x, xCV, val / 127) };
+		device.yFunc 		= { |val| this.onCCEvent(\y, yCV, val / 127) };
 
-		noteCV.changed(\synch);
-		presCV.changed(\synch);
-		xCV.changed(\synch);
-		yCV.changed(\synch);
+		noteCV.value 		= noteCV.value;
+		presCV.value 		= presCV.value;
+		xCV.value 			= xCV.value;
+		yCV.value 			= yCV.value;
 	}
 
 	disconnect {
-		this.lit = false;
-		device.noteOnFunc = nil;
-		device.noteOffFunc = nil;
-		device.presFunc = nil;
-		device.xFunc = nil;
-		device.yFunc = nil;
+		this.lit 			= false;
+		device.noteOnFunc 	= nil;
+		device.noteOffFunc 	= nil;
+		device.presFunc		= nil;
+		device.xFunc 		= nil;
+		device.yFunc 		= nil;
+
+		noteC.disconnect();
 
 		connected = false;
 	}
@@ -147,36 +174,50 @@ QuNeoPad : QuNeoInput {
 		noteCV = xCV = yCV = presCV = nil;
 		noteOnActions.clear();
 		noteOffActions.clear();
+		noteC.free();
 	}
 
 	free {
 		this.disconnect();
 		this.clear();
 		device.free();
+		noteC.free();
 	}
 
 	onNoteEvent {
-		arg on, velocity;
+		arg on, velocity, input;
 
-		if (noteCV.notNil) {
-			if (toggle) {
-				if (on) {
-					noteCV.value = toggleState.if(0, velocity);
-				}
+		if (toggle) {
+			if (on) {
+				input = toggleState.if(0, velocity);
+			}
+		} {
+			if (on) {
+				input = velocity;
 			} {
-				if (on) {
-					noteCV.input = velocity;
-				} {
-					noteCV.input = 0;
-				}
-			};
+				input = 0;
+			}
 		};
+
+		noteCV !? { noteCV.input = input };
+
+		if (input > 0) {
+			this.changed(\on, input, xCV.value, yCV.value, presCV.value);
+		} {
+			this.changed(\off, input, xCV.value, yCV.value, presCV.value);
+		}
 	}
 
 	onCCEvent {
-		| cv, value |
+		| name, cv, value |
+
 		if (cv.notNil) {
 			cv.input = value;
+		};
+
+		// Send x,y,pres notification with pressure, since it comes last
+		if (cv == presCV) {
+			this.changed(\xypres, xCV.value, yCV.value, presCV.value);
 		}
 	}
 
@@ -194,13 +235,9 @@ QuNeoPad : QuNeoInput {
 
 	noteCV_{
 		arg inCV;
-
-		noteCV.removeDependant(this);
-		noteCV = inCV;
-
-		if (noteCV.notNil) {
-			noteCV.addDependant(this);
-			noteCV.changed(\synch);
+		if (inCV != noteCV) {
+			noteCV = inCV;
+			this.connectOnNoteChanged(noteCV);
 		};
 
 		^noteCV;
@@ -209,12 +246,8 @@ QuNeoPad : QuNeoInput {
 	presCV_{
 		arg inCV;
 
-		presCV.removeDependant(this);
-		presCV = inCV;
-
-		if (presCV.notNil) {
-			presCV.addDependant(this);
-			presCV.changed(\synch);
+		if (inCV != presCV) {
+			presCV = inCV;
 		};
 
 		^presCV;
@@ -223,12 +256,8 @@ QuNeoPad : QuNeoInput {
 	xCV_{
 		arg inCV;
 
-		xCV.removeDependant(this);
-		xCV = inCV;
-
-		if (xCV.notNil) {
-			xCV.addDependant(this);
-			xCV.changed(\synch);
+		if (inCV != xCV) {
+			xCV = inCV;
 		};
 
 		^xCV;
@@ -237,35 +266,17 @@ QuNeoPad : QuNeoInput {
 	yCV_{
 		arg inCV;
 
-		yCV.removeDependant(this);
-		yCV = inCV;
-
-		if (yCV.notNil) {
-			yCV.addDependant(this);
-			yCV.changed(\synch);
+		if (inCV != yCV) {
+			yCV = inCV;
 		};
 
 		^yCV;
 	}
 
-	noteCV { ^(noteCV ?? { noteCV = defaultNoteCV.copy() }) }
-	presCV { ^(presCV ?? { presCV = defaultPresCV.copy() }) }
-	xCV { ^(xCV ?? { xCV = defaultXYCV.copy() }) }
-	yCV { ^(yCV ?? { yCV = defaultXYCV.copy() }) }
-
-	update {
-		arg who, what, inCV;
-
-		if ((what == \synch) && (inCV == noteCV)) {
-			if (noteCV.input != 0) {
-				toggleState = true;
-				this.noteOnActions.do { |f| f.value(this, inCV) };
-			} {
-				toggleState = false;
-				this.noteOffActions.do { |f| f.value(this, inCV) };
-			}
-		}
-	}
+	noteCV 	{ ^(noteCV ?? { noteCV = defaultNoteCV.copy() }) }
+	presCV 	{ ^(presCV ?? { presCV = defaultPresCV.copy() }) }
+	xCV 	{ ^(xCV ?? { xCV = defaultXYCV.copy() }) }
+	yCV 	{ ^(yCV ?? { yCV = defaultXYCV.copy() }) }
 }
 
 QuNeoPadDevice {

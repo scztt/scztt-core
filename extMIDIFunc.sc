@@ -1,0 +1,3 @@
++MIDIFunc {
+	*sysIndices { ^sysIndices }
+}

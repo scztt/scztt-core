@@ -1,0 +1,377 @@
+CtrlBus : Singleton {
+	classvar parentGroup, monitorBus;
+	classvar <serializableParams, <>archive, archivePath;
+	var <synth, bus, sent=false, holdResend, server;
+	// Serializable
+	var <process, <params, <lag=0, <in, <monitoring=0, learning;
+
+	*initClass {
+		serializableParams = ['upThreshold', 'downThreshold', 'minDur', 'timeBetween',
+		'threshold', 'dur', 'timeBetween', 'minThreshold', 'maxThreshold'];
+		archivePath = (PathName(PControl.filenameSymbol.asString).pathOnly +/+ "../PControl.archive").standardizePath;
+		archive = this.readArchive(archivePath) ?? Archive();
+	}
+
+	*snapshotAll {
+		var pcs, pts, pis;
+		pcs = PControl.all.values.asArray;
+		pts = PTrigger.all.values.asArray;
+		pis = PInput.all.values.asArray;
+
+		(pcs ++ pts ++ pis).do {
+			|pc|
+			archive.put(pc.class.name, pc.name, 'spec', pc.spec);
+		};
+
+		(pcs ++ pts).do {
+			|pc|
+			var input = pc.input;
+			if (input.isKindOf(PBusBase) and: { input.name != '' }) {
+				input = "{ %('%') }".format(input.class.name, input.name).compile;
+			};
+			archive.put(pc.class.name, pc.name, 'input', input);
+		};
+
+		(pts).do {
+			|pc|
+			serializableParams.do {
+				|param|
+				if (pc.params[param].notNil) {
+					archive.put(pc.class.name, pc.name, 'params', param, pc.params[param]);
+				}
+			}
+		};
+
+		archive.writeArchive(archivePath)
+	}
+
+	*parentGroup {
+		^parentGroup ?? {
+			parentGroup = Group(nil, 'addBefore');
+			parentGroup.onFree({
+				parentGroup = nil;
+			});
+			parentGroup;
+		};
+	}
+
+	*serializeAll {
+		var classes = [this] ++ this.allSubclasses;
+		classes.postln;
+
+		^classes.collect({ |c| c.all.values }).flatten.collect(_.serialize)
+	}
+
+	*deserializeAll {
+		|list|
+		list.do {
+			|dict|
+			var objClass = dict["class"].asSymbol.asClass;
+			objClass.deserialize(dict);
+		}
+	}
+
+	*deserialize {
+		|dict|
+		var newObj, newObjName, newObjClass;
+		newObjName = dict["name"];
+		"deserializing: %(\\%)".format(newObjClass, newObjName).postln;
+		newObjClass = dict["class"].asSymbol.asClass;
+
+		if (newObjClass.notNil) {
+			newObj = newObjClass.new(newObjName.asSymbol);
+			newObj.holdResend({
+				newObj.deserializeInto(dict["process"], 'process');
+				newObj.deserializeInto(dict["in"], 'input');
+				dict["lag"] 	!? { newObj.lag = dict["lag"].asFloat };
+				dict["params"] 	!? {
+					var params = ();
+					dict["params"].keysValuesDo { |k, v| params[k.asSymbol] = v.asFloat };
+					newObj.setParams(*params.asPairs);
+				};
+			});
+
+			^newObj
+		} {
+			Error("Class not found: %".format(dict["class"])).throw
+		}
+	}
+
+	deserializeInto {
+		|compileString, property|
+		var func, result;
+
+		if (compileString.notNil) {
+			try {
+				func = compileString.compile();
+				result = func.value();
+				if (result.notNil) {
+					this.perform(property.asSetter, result)
+				}
+			} {
+				|e|
+				"Error compiling json property { %: % }".format(property, compileString).postln;
+				e.postln;
+			}
+		}
+	}
+
+	serialize {
+		^(
+			"name":			name,
+			"class": 		this.class.name,
+			"process":		process !? process.asCompileString,
+			"params":		params,
+			"lag":			lag,
+			"in": 			case(
+				{in.isKindOf(Bus)}, 		{ in.asCompileString },
+				{in.isKindOf(PBusBase)}, 	{ "%('%')".format(in.class.name, in.name) },
+				{in !? in.asCompileString };
+			),
+		)
+	}
+
+	parentGroup { ^this.class.parentGroup }
+
+	init {
+		params = ();
+
+		server = Server.default;
+
+		ServerTree.add(this);
+		ServerQuit.add(this);
+
+		serializableParams.do {
+			|param|
+			var v = archive.at(this.class.name, this.name, 'params', param);
+			v !? { params[param] = v };
+		};
+
+		archive.at(this.class.name, this.name, 'input') !? {
+			{ this.input = archive.at(this.class.name, this.name, 'input').value }.defer;
+		};
+	}
+
+	set {
+		|inProcess|
+		this.holdResend({
+			// "setting %(\%)".format(this.class.name).postln;
+			inProcess !? 	{ this.process = inProcess };
+
+			if (server.serverRunning && synth.isNil) {
+				this.send();
+			}
+		});
+	}
+
+	clear {
+		this.free();
+		archive.put(this.class.name, this.name, nil);
+		(PControl.all.asArray ++ PInput.all.asArray ++ PTrigger.all.asArray).do {
+			|ctrl|
+			if (ctrl.input == this) {
+				ctrl.input = nil;
+			}
+		};
+		super.clear();
+	}
+
+	doOnServerTree {
+		if (sent.not) {
+			sent = true;
+			this.send();
+		}
+	}
+
+	doOnServerQuit {
+		sent = false;
+		bus = nil;
+		synth = nil;
+	}
+
+	monitorDef {
+		|sig, bus, id|
+		var shouldSend = ((NodeID.ir() - id).abs < 0.001);
+		Out.kr(bus, sig * shouldSend);
+	}
+
+	*monitorBus {
+		^(monitorBus ?? { monitorBus = Bus.control(Server.default, 2) });
+	}
+
+	monitorBus {
+		^this.class.monitorBus
+	}
+
+	monitor_{
+		|id|
+		monitoring = id;
+		if (server.serverRunning) {
+			parentGroup.set(\monitor, monitoring);
+		}
+	}
+
+	send {
+		if (holdResend.isNil) {
+			if (server.serverRunning) {
+				bus = bus ?? { Bus.control(server, 1) };
+				monitorBus = monitorBus ?? { Bus.control(server, 2) };
+				this.sendSynth();
+			}
+		} {
+			holdResend = holdResend + 1;
+		}
+	}
+
+	sendSynth {
+		var defName, def, inValue;
+		defName = this.defName;
+
+		forkIfNeeded {
+			var synthDef = this.def(defName);
+			server.sync;
+
+			synthDef.allControlNames.do {
+				|control|
+				if (params[control.name.asSymbol].isNil
+					&& (control.name != \bus) && (control.name != \in)) {
+
+					params[control.name.asSymbol] = control.defaultValue;
+				}
+			};
+
+			if (synth.notNil) {
+				synth = synth.replace(
+					defName,
+					params.asPairs ++ [
+						out: this.bus.index,
+						in: this.inValue,
+						lag: lag,
+						monitor: monitoring
+					],
+					sameID:true
+				)
+			} {
+				synth = Synth(
+					defName,
+					params.asPairs ++ [
+						out: this.bus.index,
+						in: this.inValue,
+						lag: lag,
+						monitor: monitoring
+					],
+					this.parentGroup, 'addToTail'
+				);
+			};
+
+			synth.onFree({
+				|freed|
+				if (this.synth == freed) {
+					synth = nil;
+				}
+			});
+		};
+	}
+
+	holdResend {
+		|func|
+		var oldResend;
+
+		if (holdResend.isNil) {
+			holdResend = 0;
+			protect(func, {
+				oldResend = holdResend;
+				holdResend = nil;
+
+				if (oldResend > 0) {
+					this.send();
+				};
+			})
+		} {
+			// Already holding, so just run the func.
+			func.value()
+		}
+	}
+
+	free {
+		bus !? { bus.free; bus = nil; };
+		synth !? { synth.free; synth = nil; };
+	}
+
+	bus {
+		^(bus ?? { bus = Bus.control(server, 1) });
+	}
+
+	process_{
+		|inProcess|
+		if (inProcess != process) {
+			process = inProcess;
+			this.send();
+			this.changed(\process);
+		}
+	}
+
+	lag_{
+		|inLag|
+		lag = inLag;
+		params[\lag] = lag;
+		if (synth.notNil) { synth.set(\lag, lag) };
+		this.changed(\lag);
+	}
+
+	inValue {
+		^case
+		{ in.isKindOf(Bus) } 		{ in.asMap }
+		{ in.isKindOf(PInput) }		{ in.asMap }
+		{ in.isKindOf(PBusBase) } 	{ in.bus.asMap }
+		{ in };
+	}
+
+	input_{
+		|inIn, latency=0.1|
+		if (in != inIn) {
+			in = inIn;
+			if (synth.notNil) {
+				server.makeBundle(latency, {
+					synth.set(\in, this.inValue);
+				})
+			};
+			this.changed(\in, in);
+		}
+	}
+
+	input {
+		^in
+	}
+
+	setParams{
+		|...args|
+		if (synth.notNil) {
+			synth.set(*args);
+		};
+		params.putPairs(args);
+		this.changed(\params);
+	}
+
+	asControlInput { ^this.asMap }
+
+	asMap { ^this.bus.asMap }
+
+	value {
+		if (bus.notNil && server.serverRunning) {
+			^bus.getSynchronous
+		} {
+			^nil
+		}
+	}
+
+	def { this.subclassResponsibility() }
+
+	defName {
+		var defName = "%_%".format(this.class.name, name);
+		if (process.notNil) {
+			defName = defName ++ "_" ++ process.def.sourceCode.hash.asString
+		};
+		^defName.asSymbol
+	}
+}
