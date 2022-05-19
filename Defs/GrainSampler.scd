@@ -3,14 +3,14 @@ UDef(\grainSampler, ar: {
 	|
 		buf = -1, in, inAmp=(0), feedInBus=(-1), feedOutBus=(-1), amp=0, trig=0, ttrig=0, grainDur=0.25,
 		grainRate=1, grainRateV=0,
-		pos=0, posV=0,
+		pos=0, posV=0, posRound=0, posRoundOffset=0,
 		pan=0, panV=0, env=0.5,
 		feedAmp=(-20), filtHi=4000, filtLo=20, feedDist=2,
 		interpolate=4,
 		numChannels=2
 	|
 
-	var sig, feedIn, bufSize, scaledPos, dur;
+	var sig, feedIn, bufSize, scaledPos, dur, posLow, posHigh, posRemainder;
 
 	// PARAMETERS
 	trig    = trig + ttrig;
@@ -22,7 +22,23 @@ UDef(\grainSampler, ar: {
 	amp		= amp;
 	feedAmp = feedAmp.dbamp;
 
+	// pos	= pos + TRand.ar(-1, 1, trig).linlin(-1, 1, posV.neg, posV);
+
+	posRemainder = (pos - posRoundOffset) / posRound.max(0.0000001);
+	posLow = posRemainder.floor;
+	posHigh = posRemainder.ceil;
+	posRemainder = posRemainder - posLow;
+
+	pos = (posRound > 0).if(
+		(
+			TWChoose.ar(trig, [posLow, posHigh], [1 - posRemainder, posRemainder], 0)
+			* posRound
+			+ posRoundOffset
+		),
+		pos
+	);
 	pos	= pos + TRand.ar(-1, 1, trig).linlin(-1, 1, posV.neg, posV);
+	// pos = (pos - posRoundOffset).round(posRound) + posRoundOffset;
 	// delay   = TRand.ar(-1.0, 1.0, trig).lincurve(-1.0, 1.0, delay * 2.pow(delayV.neg), delay * 2.pow(delayV), 2.3); // 0.5 <> 2.0, but weighted toward center
 	pos	= max(pos, 0).asArray;
 
@@ -42,8 +58,8 @@ UDef(\grainSampler, ar: {
 		t;
 		TGrains2.ar(
 			numChannels,
-			trigger: 	t,
 			dur: 		dur.min(100),
+			trigger: 	trig,
 			rate: 		grainRate[i],
 			bufnum: 	buf,
 			centerPos:	pos[i],
@@ -52,7 +68,8 @@ UDef(\grainSampler, ar: {
 			att: 		env * dur,
 			dec: 		(1 - env) * dur,
 			interp: 	interpolate,
-			maxgrains:  2000
+			// maxgrains:  1200
+			maxgrains: 700
 		).asArray
 	};
 	sig.assertChannels(1, numChannels);
@@ -73,7 +90,7 @@ SynthDef.channelized(\grainSampler, {
 
 	lagArgs = [\lagMult, \lagAdd, \grainDurLag, \rateLag, \posLag, \panLag, \envLag, \feedLag, \filtLag, \panLag, \ampLag];
 
-	arArgs = [\in, \trig, \grainDur, \grainRate, \grainRateV, \pos, \posV, \pan, \panV, \env];
+	arArgs = [\in, \trig, \trigRate, \trigRateV, \grainDur, \grainRate, \grainRateV, \pos, \posV, \pan, \panV, \env, \density, \posRound, \posRoundOffset];
 	krArgs = lagArgs ++ [\buf, \feedInBus, \feedOutBus, \amp, \feedAmp, \filtHi, \filtLo, \feedDist, \inAmp, \interpolate];
 	trArgs = [\ttrig];
 
@@ -115,6 +132,29 @@ SynthDef.channelized(\grainSampler, {
 	argEnv[\feedDist] 	= argEnv[\feedDist].lag2(argEnv[\lagMult] * argEnv[\feedLag] + argEnv[\lagAdd]);
 	argEnv[\numChannels]= numChannels;
 
+	argEnv[\trigRate] 	= argEnv[\trigRate].max(1/10);
+
+	argEnv[\trig] = (
+		argEnv[\ttrig]
+		+ argEnv[\trig]
+		+ Impulse.ar(0)
+		+ TDuty.ar(
+			(argEnv[\trigRate] * 2.pow(
+				Dseq(Dgauss(argEnv[\trigRateV].neg, argEnv[\trigRateV], 9999999), 9999999)
+			)).reciprocal,
+			0,
+			1
+		)
+	);
+
+	// If density is provided, skip grainDur and use this to determine duration
+	argEnv[\grainDur] = (
+		(argEnv[\density] > 0).if(
+			argEnv[\density] / argEnv[\trigRate],
+			argEnv[\grainDur]
+		)
+	);
+
 	OffsetOut.ar(\out.kr(0),
 		func.performWithEnvir(\value, argEnv));
 }, channelizations:[2, 8]);
@@ -124,13 +164,16 @@ UDef(\grainSampler).wrap(\env, ar: {
 
 	var arArgs, krArgs, trArgs, lagArgs, envArgs, argEnv, lagMult, lagAdd;
 	var sig, sustain;
-	var baseEnv, tailDur;
+	var baseEnv, tailDur, gate, envScale;
 
 	var maxEnvSize = 6;
 
 	baseEnv = { |v| Env(v ! maxEnvSize, ([1] ++ (0 ! maxEnvSize)).normalizeSum) };
 	// baseEnv = { |v| Env.newClear(6) };
 	sustain = \sustain.kr(1);
+	gate = \gate.kr(1);
+	envScale = \envScale.kr(0);
+	envScale = (envScale > 0).if(envScale, sustain);
 
 	envArgs = [
 		\grainDur,
@@ -141,7 +184,7 @@ UDef(\grainSampler).wrap(\env, ar: {
 		\pan, \panV,
 		\env
 	];
-	krArgs = lagArgs ++ [\buf, \feedInBus, \feedOutBus, \filtLo, \filtHi, \interpolate];
+	krArgs = lagArgs ++ [\buf, \feedInBus, \feedOutBus, \filtLo, \filtHi, \interpolate, \posRound, \posRoundOffset];
 
 	argEnv = ();
 
@@ -149,7 +192,7 @@ UDef(\grainSampler).wrap(\env, ar: {
 		|name|
 		var default = func.def.argNames.indexOf(name);
 		default = default !? { func.def.prototypeFrame[default] } ?? 0;
-		argEnv[name] = EnvGen.ar(name.ir(baseEnv.(default).asArray), timeScale: sustain);
+		argEnv[name] = EnvGen.ar(name.ir(baseEnv.(default).asArray), gate:gate, timeScale: envScale);
 	};
 
 	~grainSamplerEnvArgs = envArgs;
@@ -177,10 +220,9 @@ UDef(\grainSampler).wrap(\env, ar: {
 			argEnv[\grainDur]
 		)
 	);
-	argEnv[\grainDur];
 
 	argEnv[\ttrig] = 0;
-	argEnv[\amp] = \amp.kr(1) * EnvGen.ar(\ampEnv.ir(baseEnv.(1).asArray), timeScale: sustain, doneAction:2);
+	argEnv[\amp] = \amp.kr(1) * EnvGen.ar(\ampEnv.ir(baseEnv.(1).asArray), gate:gate, timeScale: envScale, doneAction:2);
 	argEnv[\numChannels] = numChannels;
 
 	func.performWithEnvir(\value, argEnv);
@@ -209,6 +251,7 @@ Event.addParentType('grainSampler.env', (
 				if (val.isArray.not) {
 					val = [val]
 				};
+
 				if (val.isArray) {
 					val = val.collect({
 						|v|
@@ -218,6 +261,7 @@ Event.addParentType('grainSampler.env', (
 						v.tryPerform(\duration_, 1)
 					})
 				};
+
 				currentEnvironment[name] = val;
 			}
 		};
