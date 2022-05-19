@@ -62,6 +62,21 @@
 	* { arg other, adverb; ^this.performBinaryOp('*', other, adverb) }
 	/ { arg other, adverb; ^this.performBinaryOp('/', other, adverb) }
 
+	++ {
+		|otherEnv|
+		^Env(
+			this.levels ++ otherEnv.levels,
+			this.times ++ [0] ++ otherEnv.times,
+			(
+				this.curves.asArray.wrapExtend(this.levels.size)
+				++ otherEnv.curves.asArray.wrapExtend(this.levels.size)
+			),
+			otherEnv.releaseNode !? (_ + this.levels.size) ?? nil,
+			otherEnv.loopNode !? (_ + this.levels.size) ?? nil,
+
+		)
+	}
+
 	*fromArray {
 		|array|
 		var originalArray, size, expectedSize, releaseNode, loopNode,
@@ -116,6 +131,31 @@
 			curves = curves.reverse
 		};
 
+	}
+
+	linlin { arg inMin, inMax, outMin, outMax, clip=\minmax;
+		^this.copy.levels_(this.levels.linlin(inMin, inMax, outMin, outMax, clip));
+	}
+	linexp { arg inMin, inMax, outMin, outMax, clip=\minmax;
+		^this.copy.levels_(this.levels.linexp(inMin, inMax, outMin, outMax, clip));
+	}
+	explin { arg inMin, inMax, outMin, outMax, clip=\minmax;
+		^this.copy.levels_(this.levels.explin(inMin, inMax, outMin, outMax, clip));
+	}
+	expexp { arg inMin, inMax, outMin, outMax, clip=\minmax;
+		^this.copy.levels_(this.levels.expexp(inMin, inMax, outMin, outMax, clip));
+	}
+	lincurve { arg inMin = 0, inMax = 1, outMin = 0, outMax = 1, curve = -4, clip = \minmax;
+		^this.copy.levels_(this.levels.lincurve(inMin, inMax, outMin, outMax, curve, clip));
+	}
+	curvelin { arg inMin = 0, inMax = 1, outMin = 0, outMax = 1, curve = -4, clip = \minmax;
+		^this.copy.levels_(this.levels.curvelin(inMin, inMax, outMin, outMax, curve, clip));
+	}
+	bilin { arg inCenter, inMin, inMax, outCenter, outMin, outMax, clip=\minmax;
+		^this.copy.levels_(this.levels.bilin(inCenter, inMin, inMax, outCenter, outMin, outMax, clip));
+	}
+	biexp { arg inCenter, inMin, inMax, outCenter, outMin, outMax, clip=\minmax;
+		^this.copy.levels_(this.levels.biexp(inCenter, inMin, inMax, outCenter, outMin, outMax, clip));
 	}
 }
 

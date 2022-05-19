@@ -8,12 +8,12 @@
 			^nil
 		}{
 			nextTime = outEvent.playAndDelta(cleanup, muteCount > 0);
-			if (outEvent.condition.notNil) {
+			if (outEvent[\condition].notNil) {
 				// this.pause(); "pausing player".postln;
 				fork {
 					"waiting for fork".postln;
-					outEvent.condition.wait();
-					outEvent.condition.test = false;
+					outEvent[\condition].wait();
+					outEvent[\condition].test = false;
 					nextBeat = nil;
 					isWaiting = true;
 					"going to resume...".postln;

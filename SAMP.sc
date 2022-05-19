@@ -4,7 +4,7 @@ SAMP : Singleton {
 
 	*initClass {
 		root = "/Users/fsc/Documents/_sounds";
-		extensions = ["wav", "aiff", "aif", "flac"];
+		extensions = ["wav", "aiff", "aif", "flac", "ogg"];
 	}
 
 	*new {
@@ -40,16 +40,17 @@ SAMP : Singleton {
 	}
 
 	gui {
-		var view, button, name;
+		var view, sampleViews, button, name;
 
 		this.lazyLoading = false;
 
 		view = View().layout_(GridLayout.rows());
 		paths.do {
 			|path, i|
+			var sampleView;
 			name = PathName(path).fileNameWithoutExtension;
 			view.layout.add(
-				DragSource()
+				sampleView = DragSource()
 					.object_("%(%)[%]".format(
 						this.class.name,
 						channels !? {
@@ -64,12 +65,32 @@ SAMP : Singleton {
 					.font_(Font("M+ 2c", 10, false))
 					.minWidth_(100)
 					.mouseDownAction_({ |v| if (v.focus) { this.bufferAt(i).play } })
-					.keyDownAction_({ this.bufferAt(i).play })
 					.focusGainedAction_({ this.bufferAt(i).play }),
 				(i / 4).floor,
 				i % 4
 			);
+			sampleViews = sampleViews.add(sampleView);
 		};
+
+		view.keyUpAction = {
+			|view, char, modifiers, unicode, keycode, key|
+			switch(
+				keycode.postln,
+				123, {
+					sampleViews[-1 + (sampleViews.detectIndex({ |v| v.hasFocus }) ? 0)].focus
+				},
+				124, {
+					sampleViews[ 1 + (sampleViews.detectIndex({ |v| v.hasFocus }) ? 0)].focus
+				},
+				125, {
+					sampleViews[ 4 + (sampleViews.detectIndex({ |v| v.hasFocus }) ? 0)].focus
+				},
+				126, {
+					sampleViews[-4 + (sampleViews.detectIndex({ |v| v.hasFocus }) ? 0)].focus
+				}
+			)
+		};
+
 		ScrollView(bounds:500@600).canvas_(view).front;
 	}
 
@@ -157,11 +178,19 @@ SAMP : Singleton {
 
 	bufferAt {
 		|index|
+		var sf;
+		index.class.postln;
 		^buffers !? {
 			buffers[index] ?? {
 				if (Server.default.serverRunning) {
 					if (channels.isNil) {
-						buffers[index] = Buffer.read(Server.default, paths[index])
+						buffers[index] = Buffer.read(Server.default, paths[index]);
+
+						sf = SoundFile.openRead(paths[index]);
+						buffers[index].numChannels = sf.numChannels;
+						sf.close();
+
+						buffers[index];
 					} {
 						buffers[index] = Buffer.readChannel(Server.default, paths[index], channels:Array.series(channels));
 					};

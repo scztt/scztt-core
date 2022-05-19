@@ -32,7 +32,7 @@ Gdef : Singleton {
 
 			~id = ~gdef.asControlInput;
 
-			~schedBundle.value(~lag, ~timingOffset, server, *Gdef.takeFinalBundle);
+			~schedBundleArray.value(~lag, ~timingOffset, server, Gdef.takeFinalBundle, false);
 		});
 
 		Event.addEventType(\gdefClear, {
@@ -129,7 +129,6 @@ Gdef : Singleton {
 			}).notNil
 		}) {
 			groupOrder = order;
-
 			this.prSend();
 		}
 	}
@@ -152,7 +151,11 @@ Gdef : Singleton {
 
 					if (gdef.notNil) {
 						if (gdef.group.isNil || reset) {
-							gdef.group = Group(previous ?? Server.default, \addAfter);
+							if (previous.notNil) {
+								gdef.group = Group(previous, \addAfter);
+							} {
+								gdef.group = Group(Server.default, \addToHead);
+							}
 							// "adding group % after %".format(gdef.group.nodeID, previous.tryPerform(\nodeID)).postln;
 						} {
 							if (previous.notNil) { gdef.group.moveAfter(previous ?? Server.default) };
@@ -166,7 +169,7 @@ Gdef : Singleton {
 				}
 			}, rebuildBundle);
 
-			{ this.prSendFinalBundle }.defer(0.00001)
+			{ this.prSendFinalBundle }.defer(0)
 		}
 	}
 

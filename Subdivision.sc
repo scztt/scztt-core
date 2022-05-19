@@ -141,7 +141,7 @@ Subdivision : Operand {
 		seq.doReplaceSeq({
 			|event, time|
 			var seq;
-			event.postln;
+
 			if (event[\subdiv].isArray) {
 				seq = this.render(
 					event[\subdiv].value,
@@ -272,7 +272,7 @@ Subdivision : Operand {
 	}
 }
 
-+Collection {
++Object {
 	asSubdivision {
 		^Subdivision(this).isRest_(this.isRest)
 	}
@@ -303,7 +303,11 @@ Subdivision : Operand {
 	}
 }
 
-
++Symbol {
+	isRest {
+		^(this == \rest) || (this == \)
+	}
+}
 
 
 

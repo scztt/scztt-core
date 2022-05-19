@@ -73,7 +73,92 @@ Pmod : Pattern {
 					defName: "Pmod_constant_%_%".format(n, rate).asSymbol,
 				);
 			}
-		}
+		};
+
+		this.wrapSynth(
+			rate: \ar,
+			channels: 1,
+			defName: \pmodEnvAr,
+			func: {
+				var env, curve, mod;
+
+				env = \env.ir(Env([0, 1, 0] ++ (0 ! 15), [0.5, 0.5] ++ (0 ! 15)).asArray);
+				env = EnvGen.ar(
+					envelope:	env,
+					gate:		1,
+				).poll(label:"pmodEnvAr");
+
+				mod = \mod.ar(0);
+
+				env + mod;
+			}
+		);
+
+		this.wrapSynth(
+			rate: \kr,
+			channels: 1,
+			defName: \pmodEnvKr,
+			func: {
+				var env, curve, mod;
+
+				env = \env.ir(Env([0, 1, 0] ++ (0 ! 15), [0.5, 0.5] ++ (0 ! 15)).asArray);
+				env = EnvGen.kr(
+					envelope:	env,
+					gate:		1,
+				);
+
+				mod = \mod.kr(0);
+
+				env + mod;
+			}
+		)
+	}
+
+	*env {
+		|...args|
+		^this.envAr(*args);
+	}
+
+	*envAr {
+		|...args|
+
+		^Pmod(
+			\pmodEnvAr,
+			\resend, true,
+			*this.prFixEnvArg(args)
+		)
+	}
+
+	*envKr {
+		|...args|
+		^Pmod(
+			\pmodEnvKr,
+			\resend, true,
+			*this.prFixEnvArg(args)
+		)
+	}
+
+	*prFixEnvArg {
+		|args|
+		// Replace a stream of envs with a stream of functions that optionally STRETCH
+		// that env based on ~stretchEnv.
+		args.pairsDo {
+			|key, value, i|
+			if (key == \env) {
+				args[i + 1] = Pfunc({
+					|env|
+					{
+						if (~stretchEnv.asBoolean) {
+							"stretching env to %".format(~parentEvent.use { ~sustain.value }).postln;
+							env = env.copy;
+							env.duration = ~parentEvent.use { ~sustain.value };
+						};
+						env;
+					}
+				}) <> value
+			}
+		};
+		^args
 	}
 
 	// Wrap a func in fade envelope / provide XOut
@@ -345,6 +430,7 @@ Pmod : Pattern {
 						if (nextEvent[\isPlaying].asBoolean.not) {
 							currentEvent = nextEvent;
 							nextEvent[\isPlaying] = true;
+							nextEvent[\parentEvent] = currentEnvironment;
 							nextEvent.playAndDelta(cleanup, false);
 						};
 
@@ -493,6 +579,7 @@ Pmod : Pattern {
 				var thunk;
 
 				if (in.isArray) { in = in[0] };
+
 				thunk = Thunk({
 					in.value
 				});

@@ -19,7 +19,8 @@ PstepEv : Pattern {
 					if (event.notNil) {
 						val = event.at(key);
 						dur = event.delta;
-						dur.postln;
+						val.postln;
+						"% --[%]-> %".format(thisThread.beats, dur, thisThread.endBeat).postln;
 						if (val.notNil && dur.notNil) {
 							thisThread.endBeat = thisThread.endBeat + dur;
 							thisThread.endBeat <= thisThread.beats
@@ -41,6 +42,7 @@ PstepEv : Pattern {
 		};
 		^inval;
 	}
+
 	storeArgs {
 		^[eventPattern, repeats, key]
 	}

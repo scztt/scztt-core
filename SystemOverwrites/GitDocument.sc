@@ -3,7 +3,7 @@ GitProject {
 	var <>gitRoot, <git;
 
 	*current {
-		^this.fromDocument(Document.current);
+		^this.fromDocument(Document !? _.current);
 	}
 
 	*fromDocument {

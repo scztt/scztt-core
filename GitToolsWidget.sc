@@ -45,11 +45,11 @@ GitToolsWidget : ServerWidgetBase {
 
 		branchButton.action = {
 			GitProject.current !? _.branchGui({
-				Document.changed(\current);
+				Document !? _.changed(\current);
 			});
 		};
 
-		Document.signal(\current).connectToUnique({
+		Document !? (_.signal(\current)) !? _.connectToUnique({
 			var status;
 			var doc = GitDocument.current;
 
@@ -116,11 +116,11 @@ GitToolsWidget : ServerWidgetBase {
 				gitToolbar.clear();
 				noGitMenus.do(gitToolbar.addAction(_));
 			};
-		}).freeAfter(view);
+		}) !? _.freeAfter(view);
 
-		Document.changed(\current);
+		Document !? _.changed(\current);
 
-		view.toFrontAction = { Document.changed(\current) };
+		view.toFrontAction = { Document !? _.changed(\current) };
 
 		^view
 	}

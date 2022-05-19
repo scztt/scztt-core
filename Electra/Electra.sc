@@ -104,7 +104,7 @@ ElectraCCParamDef : ElectraDefBase {
 
 ElectraCC14ParamDef : ElectraDefBase {
 	const channelsPerPort=8;
-	var <>deviceId=0, <type="cc14", <>parameterNumber, <min=0, <max=16383;
+	var <>deviceId=0, <>type="cc14", <>parameterNumber, <>min=0, <>max=16383;
 	// var <>lsbFirst=false;
 
 	*new {
@@ -140,18 +140,23 @@ ElectraControlDef : ElectraDefBase {}
 ElectraFaderDef : ElectraControlDef {
 	//classvar <>startX=4, <>startY=36, <>spanX=170, <>spanY=92, <>width=146, <>height=56;
 	classvar <>startX=0, <>startY=40, <>spanX=170, <>spanY=92, <>width=146, <>height=56;
+	classvar <>maxRange=16383;
 
 	var <>color, <parameter,
-	<>max, <>min, <>defaultValue=0,
+	<>max, <>min, <>defaultValue=0, <>spec,
 	<>name="", <>type="fader",
 	<>overlay, <>bank, <>index;
 
 	*fromSpec {
 		|controlSpec|
 		var def = this.new();
-		def.min = controlSpec.minval;
-		def.max = controlSpec.maxval;
+		var range = this.calcMinMax(controlSpec);
+
+		def.min = range[0];
+		def.max = range[1];
 		def.defaultValue = controlSpec.default;
+		def.spec = controlSpec;
+
 		^def
 	}
 
@@ -159,7 +164,50 @@ ElectraFaderDef : ElectraControlDef {
 		^super.new.init
 	}
 
-	ignoreFields { ^[\min, \max, \parameter, \bank, \index] }
+	*calcMinMax {
+		|controlSpec|
+		var zeroVal;
+
+		if ((controlSpec.minval * controlSpec.maxval).isNegative) {
+			zeroVal = controlSpec.unmap(0);
+			^[
+				-1 * (maxRange * zeroVal).floor.asInteger,
+				(maxRange * (1 - zeroVal)).floor.asInteger
+			]
+		} {
+			^[
+				0,
+				maxRange
+			]
+		}
+	}
+
+	toLuaNumber {
+		|value|
+		^if (value == inf) {
+			"(1/0)"
+		} {
+			if (value == -inf) {
+				"(-1/0)"
+			} {
+				value.asString
+			}
+		}
+	}
+
+	luaWarpDescription {
+		|id|
+		^"\t[%] = {%, %, %, %, %, %}".format(
+			id,
+			spec.warp.class.name.asString,
+			spec.minval,
+			spec.maxval,
+			spec.step ?? {0},
+			spec.warp.respondsTo(\curve).if({ spec.warp.curve }, { 0 })
+		)
+	}
+
+	ignoreFields { ^[\defaultValue, \name, \min, \max, \parameter, \bank, \index, \step, \warpFunc, \spec] }
 
 	init {
 		this.color = Color.green;
@@ -175,6 +223,7 @@ ElectraFaderDef : ElectraControlDef {
 	toDict {
 		^super.toDict
 		.putAll((
+			name: name ++ (spec.units.notEmpty.if({ " [%]".format(spec.units) }, { "" })),
 			color: this.colorToJSON(color),
 			bounds: Rect(
 				(startX + ((index % 6) * spanX)).asInteger,
@@ -186,7 +235,9 @@ ElectraFaderDef : ElectraControlDef {
 				id: "value",
 				min: min,
 				max: max,
-				message: parameter.toDict()
+				defaultValue: spec.unmap(defaultValue).linlin(0, 1, min, max).round.asInteger;,
+				formatter: "warp",
+				message: parameter.toDict(),
 			)]
 		))
 	}
@@ -538,7 +589,7 @@ ElectraPreset : ElectraDefBase {
 			controls: [],
 		);
 
-		// dict[\pages] = pages.collect(_.toDict());
+		dict[\pages] = pages.collect(_.toDict());
 		dict[\controls] = pages.collect(_.controlDicts).flatten;
 		dict[\groups] = pages.collect(_.groupDicts).flatten;
 		dict[\devices] = 16.collect {
@@ -575,29 +626,114 @@ ElectraPreset : ElectraDefBase {
 
 		^dict
 	}
+}
 
-	*toSysexBytes {
-		|json|
-		var header, footer, bytes;
+ElectraDevice {
+	var midiOut;
 
-		// header = Int8Array[0xF0, 0x7D, 0x01, 0x01];
-		header = Int8Array[0xF0, 0x00, 0x21, 0x45, 0x01, 0x00];
-		// footer = Int8Array[-9];
-		footer = Int8Array[0xF7];
-
-		bytes = Int8Array.newClear(json.size);
-		json.do {
-			|c, i|
-			bytes[i] = c.ascii
-		};
-		bytes = header ++ bytes ++ footer;
-		^bytes;
+	*new {
+		|midiOut|
+		^super.newCopyArgs(midiOut).init
 	}
 
-	sendSysex {
-		|midiOut, json|
-		json = json ?? { this.toDict.toJSON };
-		midiOut.sysex(this.class.toSysexBytes(json));
+	init {
+		midiOut = midiOut ?? {
+			MIDIOut.newByName("Electra Controller", "Electra CTRL");
+		};
+
+		midiOut.latency = 0;
+	}
+
+	sendPreset {
+		|json|
+		midiOut.sysex(
+			this.class.makeMessage(\uploadData, \presetFile, json)
+		);
+	}
+
+	sendScript {
+		|script|
+		midiOut.sysex(
+			this.class.makeMessage(\uploadData, \luaScript, script)
+		);
+	}
+
+	sendConfiguration {
+		|json|
+		midiOut.sysex(
+			this.class.makeMessage(\uploadData, \configurationFile, json)
+		);
+	}
+
+	enableLogging {
+		|enabled=true|
+		midiOut.sysex(
+			this.class.makeMessage(\systemCall, \loggerStatus,
+				enabled.if({[0x01, 0x00]}, {[0x00, 0x00]})
+			)
+		);
+	}
+
+	*api {
+		|category, command|
+		var api = (
+			queryData: (
+				_byte: 0x02,
+				electraInformation: 0x7F,
+				runtimeInformation: 0x7E,
+				presetFile: 0x01,
+				configurationFile: 0x02,
+				snapshotList: 0x05,
+				luaScript: 0x0C,
+				applicationInformation: 0x7C,
+			),
+			uploadData: (
+				_byte: 0x01,
+				presetFile: 0x01,
+				configurationFile: 0x02,
+				luaScript: 0x0C,
+			),
+			systemCall: (
+				_byte: 0x7F,
+				logMessage: 0x00,
+				loggerStatus: 0x7D,
+			),
+			updateRuntime: (
+				_byte: 0x14,
+				control: 0x07
+			)
+		);
+		category = api[category];
+
+		^Int8Array[category[\_byte], category[command]];
+	}
+
+	*makeMessage {
+		|category, command, data|
+		var header, footer, msg;
+
+		header = Int8Array[
+			0xF0, 				// sysex header
+			0x00, 0x21, 0x45, 	// electra manufacturer id
+		];
+		footer = Int8Array[0xF7]; // sysex closing byte
+		command = this.api(category, command);
+
+		if (data.isString) {
+			data = data.collectAs(_.ascii, Int8Array)
+		};
+
+		if (data.class != Int8Array) {
+			data = Int8Array.newFrom(data.asArray)
+		};
+
+		msg = Int8Array(header.size + command.size + data.size + footer.size);
+		msg = msg.addAll(header);
+		msg = msg.addAll(command);
+		msg = msg.addAll(data);
+		msg = msg.addAll(footer);
+
+		^msg;
 	}
 }
 
@@ -611,14 +747,18 @@ ElectraFactory {
 
 	*load {
 		|cve|
-		var midiOut = MIDIOut.newByName("Electra Controller", "Electra CTRL");
-		midiOut.latency = 0;
+		var preset, device = ElectraDevice();
 
 		cve.signal(\controls).connectToUnique(\ElectraFactory, {
 			this.load(cve);
 		}).collapse(reloadDelay);
 
-		this.newFrom(cve).sendSysex(midiOut);
+		preset = this.newFrom(cve);
+		device.sendPreset(preset.toDict.toJSON.postln);
+
+		{
+			device.sendScript(this.makeLuaScript(preset));
+		}.defer(2.5);
 
 		// workaround for defaultValue not working
 		// { cve.do(_.emitChanged()) }.defer(15);
@@ -635,6 +775,7 @@ ElectraFactory {
 	*newFrom {
 		|cve|
 		var groups, groupItems, groupOrder, defaultGroup, preset, index;
+		var luaWarpDescriptions;
 
 		midiCVs.do(_.free);
 		midiCVs = ();
@@ -675,9 +816,42 @@ ElectraFactory {
 		^preset
 	}
 
+	*makeLuaScript {
+		|preset|
+		var script = File.readAllString("/Users/fsc/Desktop/scztt-Core/sc_electra.lua");
+		var warpLines = [];
+
+		preset.pages.do {
+			|page|
+			page.banks.do {
+				|bank|
+				bank.slots.do {
+					|item|
+					item.postln;
+					if (item.respondsTo(\luaWarpDescription)) {
+						warpLines = warpLines.add(
+							item.luaWarpDescription(
+								item.parameter.parameterNumber
+							)
+						)
+					}
+				}
+			}
+		};
+
+		script = script.replace(
+			"%%%warps%%%",
+			warpLines.join(",\n")
+		);
+		script.postln;
+
+		^script
+	}
+
 	*addToPreset {
 		|index, preset, group, items|
 		var page, pageIndex, bank, bankIndex, controlDef, leftoverItems;
+
 		if (items.size > ElectraBank.bankSize) {
 			leftoverItems = items[ElectraBank.bankSize..];
 			items = items[0..(ElectraBank.bankSize-1)];
@@ -708,8 +882,6 @@ ElectraFactory {
 
 			index = (page * ElectraPage.pageSize) + pageIndex;
 		};
-
-		[index, page, pageIndex, bank, bankIndex].postln;
 
 		items.do {
 			|item, slotIndex|
@@ -751,6 +923,8 @@ ElectraFactory {
 		var minimumVisibleRange = 20;
 		var smallRange, largeRange, nonLinear;
 		var specRange, controlDef, overlayLabel, overlayUnits, midiCV;
+		var paramIds14 = (0x00 + (0x00..0x1F)) ++ (0x40 + (0x00..0x1F));
+		var luaWarpDescriptions;
 
 		switch(
 			cv.class,
@@ -810,9 +984,10 @@ ElectraFactory {
 				);
 			},
 			{
-				controlDef = ElectraFaderDef();
+				controlDef = ElectraFaderDef.fromSpec(cv.spec.asSpec);
 				controlDef.name = this.fixName(cv.name);
 				controlDef.type = cv.md[\controlType] ?? { "fader" };
+				controlDef.defaultValue = cv.value;
 
 				specRange = cv.spec.maxval.absdif(cv.spec.minval);
 
@@ -820,26 +995,11 @@ ElectraFactory {
 				largeRange = specRange >= 512;
 				nonLinear = cv.spec.warp.isKindOf(LinearWarp).not;
 
-				if (cv.md[\overlay].asBoolean) {
-					controlDef.min = 0;
-					controlDef.max = overlaySteps;
-					controlDef.overlay = this.makeOverlay(overlaySteps, cv.spec);
-
-				} {
-					if (cv.md[\hideNumbers].asBoolean || smallRange || largeRange || nonLinear) {
-						controlDef.min = 0;
-						controlDef.max = 128*128-1;
-					} {
-						controlDef.min = cv.spec.minval.round.asInteger;
-						controlDef.max = cv.spec.maxval.round.asInteger;
-					}
-				};
-
 				// controlDef.defaultValue = cv.input.linlin(0, 1, controlDef.min, controlDef.max).round.asInteger.postln;
 				controlDef.color = cv.color ?? { group.color } ?? { Color.white };
 
 				if (cv.md[\cc8].asBoolean.not) {
-					controlDef.parameter = ElectraCC14ParamDef(index % 32, (index / 32).asInteger);
+					controlDef.parameter = ElectraCC14ParamDef(paramIds14[index], (index / paramIds14.size).asInteger);
 					if (cv.respondsTo('cc14_')) {
 						cv.cc14_(
 							controlDef.parameter.parameterNumber,
@@ -851,7 +1011,7 @@ ElectraFactory {
 						"Could not connect parameter '%' to midi".format(cv.name).warn;
 					};
 				} {
-					controlDef.parameter = ElectraCCParamDef(index % 32, (index / 32).asInteger);
+					controlDef.parameter = ElectraCCParamDef(index % 32, (index / paramIds14.size).asInteger);
 					if (cv.respondsTo('cc_')) {
 						cv.cc_(
 							controlDef.parameter.parameterNumber,
@@ -862,7 +1022,9 @@ ElectraFactory {
 					} {
 						"Could not connect parameter '%' to midi".format(cv.name).warn;
 					};
-				}
+				};
+
+				controlDef.overlay.put(0, "~");
 			}
 		);
 

@@ -1,9 +1,12 @@
 #{
-	var tempo, server, eventTypes, parentType;
-	parentType = ~parentTypes[~parentType ?? { ~type }];
+	var tempo, server, eventTypes, parentType, type;
+	type = ~parentType ?? { ~type };
+	parentType = ~parentTypes[type];
 	parentType !? { currentEnvironment.parent = parentType };
 
 	server = ~server = ~server ? Server.default;
+
+	~tempo = ~tempo.value(currentEnvironment);
 
 	~finish.value(currentEnvironment);
 
@@ -60,7 +63,7 @@
 	tempo !? { thisThread.clock.tempo = tempo };
 
 	if(currentEnvironment.isRest.not) {
-		eventTypes = ~eventTypes;
+		eventTypes = ~eventTypes ?? { Event.eventTypes };
 		(eventTypes[~type] ?? { eventTypes[\note] }).value(server)
 	};
 

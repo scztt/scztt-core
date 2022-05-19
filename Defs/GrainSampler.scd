@@ -73,7 +73,7 @@ SynthDef.channelized(\grainSampler, {
 
 	lagArgs = [\lagMult, \lagAdd, \grainDurLag, \rateLag, \posLag, \panLag, \envLag, \feedLag, \filtLag, \panLag, \ampLag];
 
-	arArgs = [\in, \trig, \trigRate, \trigRateV, \grainDur, \grainRate, \grainRateV, \pos, \posV, \pan, \panV, \env, \density];
+	arArgs = [\in, \trig, \grainDur, \grainRate, \grainRateV, \pos, \posV, \pan, \panV, \env];
 	krArgs = lagArgs ++ [\buf, \feedInBus, \feedOutBus, \amp, \feedAmp, \filtHi, \filtLo, \feedDist, \inAmp, \interpolate];
 	trArgs = [\ttrig];
 
@@ -114,29 +114,6 @@ SynthDef.channelized(\grainSampler, {
 	argEnv[\filtLo] 	= argEnv[\filtLo].lag2(argEnv[\lagMult] * argEnv[\filtLag] + argEnv[\lagAdd]);
 	argEnv[\feedDist] 	= argEnv[\feedDist].lag2(argEnv[\lagMult] * argEnv[\feedLag] + argEnv[\lagAdd]);
 	argEnv[\numChannels]= numChannels;
-
-	argEnv[\trigRate] 	= argEnv[\trigRate].max(1/10);
-
-	argEnv[\trig] = (
-		argEnv[\ttrig]
-		+ argEnv[\trig]
-		+ Impulse.ar(0)
-		+ TDuty.ar(
-			(argEnv[\trigRate] * 2.pow(
-				Dseq(Dgauss(argEnv[\trigRateV].neg, argEnv[\trigRateV], 9999999), 9999999)
-			)).reciprocal,
-			0,
-			1
-		)
-	);
-
-	// If density is provided, skip grainDur and use this to determine duration
-	argEnv[\grainDur] = (
-		(argEnv[\density] > 0).if(
-			argEnv[\density] / argEnv[\trigRate],
-			argEnv[\grainDur]
-		)
-	);
 
 	OffsetOut.ar(\out.kr(0),
 		func.performWithEnvir(\value, argEnv));
@@ -200,6 +177,7 @@ UDef(\grainSampler).wrap(\env, ar: {
 			argEnv[\grainDur]
 		)
 	);
+	argEnv[\grainDur];
 
 	argEnv[\ttrig] = 0;
 	argEnv[\amp] = \amp.kr(1) * EnvGen.ar(\ampEnv.ir(baseEnv.(1).asArray), timeScale: sustain, doneAction:2);
@@ -231,7 +209,6 @@ Event.addParentType('grainSampler.env', (
 				if (val.isArray.not) {
 					val = [val]
 				};
-
 				if (val.isArray) {
 					val = val.collect({
 						|v|
@@ -241,7 +218,6 @@ Event.addParentType('grainSampler.env', (
 						v.tryPerform(\duration_, 1)
 					})
 				};
-
 				currentEnvironment[name] = val;
 			}
 		};

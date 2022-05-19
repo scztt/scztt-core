@@ -1,0 +1,403 @@
+PparStream : Stream {
+	var <>initStreamAction, <>endStreamAction;
+	var priorityQ, <now;
+	var <injectFunc;
+
+	*forkPatterns {
+		|pattern|
+		var event, outerEvent, recursionLevel, instrument, embeddingLevel, freq, rest;
+		var args, defaults, timingOffset, sustain;
+		var size, newPatterns = [];
+
+		if(pattern.notNil) {
+			// preserve information from outer pattern, but not delta.
+
+			if (pattern.isKindOf(Function)) {
+				defaults = pattern.def.prototypeFrame;
+				args = pattern.def.argNames.collect {
+					|name, i|
+					currentEnvironment[name].value ?? { defaults[i] }
+				};
+				pattern = pattern.value(*args);
+			};
+
+			sustain = outerEvent.use { ~sustain.value };
+
+			if(~transparency ? true) {
+				outerEvent = currentEnvironment.copy;
+				outerEvent.putPairs(
+					[
+						\instrument, \pattern, \type,
+						\parentType, \addToCleanup, \removeFromCleanup, \sustain, \legato
+					].collect([_, nil]).flatten
+				)
+			} {
+				outerEvent = Event.default.copy;
+			};
+
+			outerEvent.put(\delta, nil); // block delta modification by Ppar
+			outerEvent.put(\instrument, ~synthDef);
+
+			if (~flop ?? { false }) {
+				outerEvent = outerEvent.asPairs.flop.collect(_.asEvent);
+				outerEvent.do(_.parent_(currentEnvironment.parent));
+			} {
+				outerEvent = [outerEvent]
+			};
+
+			outerEvent.do {
+				|outerEvent, i|
+				var innerPattern, timingOffset, gatePattern, localPattern;
+
+				outerEvent.use {
+					innerPattern = pattern;
+
+					if (innerPattern.isKindOf(Symbol)) {
+						innerPattern = Pdef(pattern);
+					};
+
+					if (innerPattern.isStream and: { outerEvent.size > 1 }) {
+						innerPattern = innerPattern.copy;
+					};
+
+					innerPattern = innerPattern.value;
+
+					if (innerPattern.isKindOf(Event)) {
+						Error("Event patterns must be wrapped in a Ref or a function when passed in as an \instrument argument").throw;
+					};
+
+					if (innerPattern.isKindOf(PatternProxy)) {
+						innerPattern = innerPattern.pattern; // optimization. outer pattern takes care for replacement
+					};
+
+					if (innerPattern.notNil) {
+						timingOffset = (~timingOffset.value ? 0);
+						gatePattern = (~gatePattern.value ? true);
+
+						// not sure why we DON'T need to account for positive timingOffset here,
+						// but if we do it breaks....
+						if (gatePattern) {
+							innerPattern = innerPattern.finDur(sustain - timingOffset.min(0));
+						};
+
+						innerPattern = Pevent(innerPattern, outerEvent);
+
+						if (timingOffset < 0) {
+							innerPattern.fastForward(timingOffset.neg, 0, outerEvent);
+						};
+
+						newPatterns = newPatterns.add([
+							timingOffset, innerPattern
+						]);
+					}
+				}
+			}
+		};
+
+		^newPatterns;
+	}
+
+	*initClass {
+		Class.initClassTree(Event);
+
+		Event.addEventType(\fork, {
+			this.forkPatterns(~pattern ?? { ~instrument }).do {
+				|newPatterns|
+				~injectStream.value(
+					delta: newPatterns[0],
+					stream: newPatterns[1],
+					inval: newPatterns[2]
+				)
+			}
+		}, Event.parentEvents.default.copy.putAll((legato:1)));
+	}
+
+	*new {
+		^super.new.init
+	}
+
+	init {
+		priorityQ = PriorityQueue();
+		now = 0;
+		injectFunc = { |delta, stream, inval| this.injectStream(delta, stream, inval) };
+	}
+
+	reset {
+		this.init();
+	}
+
+	injectStream {
+		|delta, stream, inval|
+		stream = stream.asStream;
+		initStreamAction !? {
+			stream = initStreamAction.value(stream, inval).asStream
+		};
+		priorityQ.put(now + delta, stream);
+		^stream;
+	}
+
+	injectEvent {
+		|delta, event, inval|
+		this.injectStream(
+			delta,
+			Routine({ event.yield; nil.yield }, 2),
+			inval
+		)
+	}
+
+	embedInStream {
+		|inval, duration|
+		var stream, nextTime, outval, endTime;
+
+		endTime = now + (duration ? inf);
+
+		while { priorityQ.notEmpty and: { now < endTime } } {
+			nextTime = min(
+				priorityQ.topPriority,
+				endTime
+			);
+			"now: %        nextTime: %    endTime: %".format(now, nextTime, endTime).postln;
+
+			if (nextTime > now) {
+				inval = Event.silent(nextTime - now, inval).yield;
+				now = nextTime;
+			} {
+				stream = priorityQ.pop;
+				outval = stream.next(inval).asEvent;
+
+				if (outval.notNil) {
+					// requeue stream
+					priorityQ.put(now + outval.delta, stream);
+					outval[\delta] = 0;
+					outval['injectStream'] = outval['injectStream'] ?? { injectFunc };
+					inval = outval.yield;
+				} {
+					endStreamAction.value(stream, inval);
+				}
+			};
+		};
+
+		if (duration.notNil and: { now < endTime }) {
+			inval = Event.silent(endTime - now).yield;
+		};
+
+		^inval
+	}
+}
+
+Ppar2 : ListPattern {
+	var <>initStreamAction, <>endStreamAction;
+
+	embedInStream {
+		|inval|
+		var parStream = PparStream()
+		.initStreamAction_(initStreamAction)
+		.endStreamAction_(endStreamAction);
+
+		repeats.value(inval).do({
+			list.do(parStream.injectStream(0, _, inval));
+			parStream.embedInStream(inval);
+			parStream.reset();
+		})
+	}
+}
+
+PwithStream : Stream {
+	var <>parStream, <>inputStream, <>condition, <>patternFunction, <>replaceOriginalEvent=true, <>gate=true;
+	var routine;
+
+	*new {
+		|parStream, inputStream, condition, patternFunction, replaceOriginalEvent=true, gate=true|
+		^super.newCopyArgs(parStream, inputStream, condition, patternFunction, replaceOriginalEvent, gate).init
+	}
+
+	init {
+		routine = Routine({
+			|inEvent|
+			this.embedInStream(inEvent);
+		});
+	}
+
+	next {
+		|inEvent|
+		^routine.next(inEvent);
+	}
+
+	embedInStream {
+		|inEvent|
+		var shouldForkStream, shouldPlayOriginalEvent, originalEventDelta;
+		var inEvents;
+
+		shouldForkStream = condition.asPattern.asStream;
+
+		while {
+			"> Stream(%)".format(this.identityHash).postln;
+			"  nexting from Stream(%)".format(inputStream.identityHash).postln;
+			while {
+				inEvents = inEvents.add(inputStream.next(inEvent));
+				inEvents.last.notNil and: { inEvents.last.delta < 0.000000001 };
+			};
+			inEvents.last.notNil;
+		} {
+			"> Stream(%) collected events: %".format(this.identityHash, inEvents).postln;
+			shouldPlayOriginalEvent = true;
+			originalEventDelta = inEvents.last.delta;
+
+			inEvents.do {
+				|event|
+				if (event.notNil and: { event.isRest.not and: { shouldForkStream.next(event) } }) {
+					shouldPlayOriginalEvent = replaceOriginalEvent.not;
+
+					event.use {
+						~gatePattern = gate ?? { ~gatePattern };
+						PparStream.forkPatterns(
+							patternFunction.valueEnvir();
+						).do {
+							|p|
+							parStream.injectStream(p[0], p[1], currentEnvironment)
+						}
+					};
+
+					if (shouldPlayOriginalEvent) {
+						parStream.injectEvent(0, event.copy);
+					}
+				}
+			};
+			inEvents.clear;
+
+			"> Stream(%) embedding parStream for % beats".format(this.identityHash, originalEventDelta).postln;
+			inEvent = parStream.embedInStream(inEvent, originalEventDelta);
+		};
+
+		^nil.yield
+	}
+}
+
+Pwith : Pattern {
+	var <inputPattern, <conditions, <patternFunctions,
+	replaceOriginalEvent=true, <>gate=true;
+
+	*new {
+		|inputPattern, condition, pattern ...conditionPatterns|
+		conditionPatterns = [condition, pattern] ++ conditionPatterns;
+		conditionPatterns = conditionPatterns.clump(2).flop;
+
+		^super.newCopyArgs(
+			inputPattern,
+			conditionPatterns[0],
+			conditionPatterns[1].collect {
+				|p|
+				p.isFunction.if({
+					p
+				}, {
+					{ p }
+				})
+			},
+			true,
+			true
+		)
+	}
+
+	asStream {
+		var stream;
+		var inputStream = inputPattern.asStream;
+
+		"::inputStream = %".format(inputStream.identityHash).postln;
+
+		// inputStream = PwithStream(
+		// 	PparStream(),
+		// 	inputStream,
+		// 	conditions[0],
+		// 	patternFunctions[0],
+		// 	replaceOriginalEvent,
+		// 	gate
+		// );
+
+		[conditions, patternFunctions].flop.do {
+			|conditionPattern|
+			var condition, patternFunction, currentInputStream;
+			#condition, patternFunction = conditionPattern;
+
+			currentInputStream = inputStream;
+			inputStream = PwithStream(
+				PparStream(),
+				currentInputStream,
+				condition,
+				patternFunction,
+				replaceOriginalEvent,
+				gate
+			);
+
+			"::inputStream = %".format(inputStream.identityHash).postln;
+			patternFunction.def.sourceCode.postln;
+		};
+
+		^inputStream
+	}
+}
+
+Pfork : Pwith {
+	*new {
+		|inputPattern, condition, pattern|
+		^super.newCopyArgs(
+			condition,
+			pattern.isFunction.if(
+				{ pattern },
+				{ { pattern } }
+			),
+			inputPattern,
+			false,
+			true
+		)
+	}
+}
+
+Preplace : Pwith {
+	*new {
+		|inputPattern, condition, pattern|
+		^super.newCopyArgs(
+			condition,
+			pattern.isFunction.if(
+				{ pattern },
+				{ { pattern } }
+			),
+			inputPattern,
+			true,
+			true
+		)
+	}
+}
+
+Pinsert : Pwith {
+	*new {
+		|inputPattern, condition, pattern|
+		^super.newCopyArgs(
+			condition,
+			pattern.isFunction.if(
+				{ pattern },
+				{ { pattern } }
+			),
+			inputPattern,
+			true,
+			false
+		)
+	}
+}
+
+Pb : Ppar2 {
+	*new {
+		|...keysValues|
+		^super.new([
+			Pbind(
+				*keysValues
+			)
+		])
+	}
+}
+
++Ppar {
+	*new {
+		|list, repeats=1|
+		^Ppar2.new(list, repeats);
+	}
+}

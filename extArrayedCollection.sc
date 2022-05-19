@@ -16,4 +16,20 @@
 
 		^maxDelta;
 	}
+
+	unpackDo {
+		|function|
+		this.do {
+			|item, i|
+			function.value(*(item.asArray ++ [i]))
+		}
+	}
+
+	unpackCollect {
+		|function|
+		^this.collect {
+			|item, i|
+			function.value(*(item.asArray ++ [i]))
+		}
+	}
 }
