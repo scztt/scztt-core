@@ -10,9 +10,11 @@
 		var pos, in, buffer, inLast, inChanged, inLag;
 
 		in = \in.kr(0);
-		// in = In.ar(in, 1);
 		in = in.fadeChange(
-			In.ar(_, 1),
+			{
+				|in|
+				In.ar(in, 1)
+			},
 			\fadeTime.kr(1/16)
 		);
 
@@ -21,7 +23,7 @@
 
 		BufWr.ar(in, buffer, pos, 1);
 
-		OffsetOut.ar(\out.ir, pos);
+		OffsetOut.ar(\prOut.ir, pos);
 	}).addReplace;
 };
 
@@ -37,19 +39,20 @@ if (Server.default.serverRunning) { ~setupGrainDelay.() };
 // ~grainDelayBuf.plot;
 
 UDef(\grainDelay2Base, ar: {
-	|buf, in, dryAmp=0, pos,
+	|buf, in, dryAmp=0, dryDelay=0, pos,
 	amp=1, trig=0, ttrig=0, grainDur=0.25,
 	grainRate=1, grainRateV=0,
 	delay=0, delayV=0,
 	decay=999, decayV=0,
 	pan=0, panV=0,
+	delayRound=0, delayRoundOffset=0,
 	env=0.5,
 	feedAmp=1, filtLo=20, filtHi=10000, feedDist=0,
-	initialWriteProxy=0,
+	initialWriteProxy=0, feedOut,
 	gate=1, envBuf=(-1)
 	|
 
-	var sig, feedSig, feedInSig, bufSize, scaledPos, dur, grainAmp, halfGrain, usingExternalBuffer;
+	var sig, feedSig, feedInSig, bufSize, scaledPos, dur, grainAmp, halfGrain, usingExternalBuffer, delayLow, delayHigh, delayRemainder;
 
 	// SETUP /////////////////////////////////////////////////////////////////////////
 	if (pos.isNil && buf.isNil) {
@@ -88,6 +91,19 @@ UDef(\grainDelay2Base, ar: {
 	dur     = grainDur;
 
 	delay	= delay * 2.pow(TRand.ar(delayV.neg, delayV, trig));
+
+	delayRemainder = (delay - delayRoundOffset) / delayRound.max(0.0000001);
+	delayLow = delayRemainder.floor;
+	delayHigh = delayRemainder.ceil;
+	delayRemainder = delayRemainder - delayLow;
+
+	delay = (delayRound > 0).if(
+		(
+			TWChoose.ar(trig, [delayLow, delayHigh], [1 - delayRemainder, delayRemainder], 0) * delayRound
+		) + delayRoundOffset,
+		delay
+	);
+	delay = max(0, delay);
 
 	decayV  = ((decay + decayV) / decay).log / 2.log;
 	decayV  = decayV.max(0);
@@ -143,9 +159,13 @@ UDef(\grainDelay2Base, ar: {
 
 	feedSig = LinXFade2.ar(*sig);
 	feedSig	= blend(
-		SoftClipAmp4.ar(feedSig, 0.5, 2),
-		SoftClipAmp4.ar(feedSig, feedDist),
-		feedDist.min(1)
+		blend(
+			SoftClipAmp4.ar(feedSig, 0.5, 2),
+			SoftClipAmp4.ar(feedSig, feedDist),
+			feedDist.min(1).max(0)
+		),
+		feedSig,
+		feedDist.neg.min(1).max(0)
 	);
 
 	feedSig = feedAmp * feedSig;
@@ -153,24 +173,33 @@ UDef(\grainDelay2Base, ar: {
 	feedSig = BHiPass.ar(feedSig, filtLo, 6);
 	feedSig	= LeakDC.ar(feedSig);
 
-	feedSig = SoftKneeCompressor.peak(feedSig, in + feedSig, feedAmp * -12.dbamp, 1/100, 6, 0.1, 0.5);
+	feedSig = SoftKneeCompressor.peak(
+		feedSig,
+		in + feedSig,
+		feedAmp * -12.dbamp,
+		1/100,
+		6,
+		0.1,
+		0.5
+	);
 	feedSig = in + feedSig;
 
 	BufWr.ar(feedSig, buf, pos, 1);
 
 	// sig = Compander.ar(sig, sig.mean, -3.dbamp, 1.2, 1/10);
+	in = DelayN.ar(in, 8, dryDelay);
 	sig = (amp * sig) + (dryAmp * in);
 });
 
 UDef(\grainDelay2, ar: {
 	|buf, pos|
 	var arArgs, krArgs, trArgs, lagArgs, func, argEnv, lagMult, lagAdd;
-	var sig, feedSig, feedBuf, feedBufPos, env;
+	var sig, feedSig, feedBuf, feedBufPos, env, trig;
 
 	lagArgs = [\lagMult, \lagAdd, \grainDurLag, \grainRateLag, \delayLag, \decayLag, \panLag, \envLag, \feedLag, \filtLag, \ampLag];
 
-	arArgs = [\in, \trig, \trigRate, \trigRateV, \density, \grainDur, \grainRate, \grainRateV, \delay, \delayV, \pan, \panV, \env, \decay, \decayV];
-	krArgs = lagArgs ++ [\amp, \feedAmp, \filtHi, \filtLo, \feedDist, \inAmp, \dryAmp, \gate, \envBuf];
+	arArgs = [\in, \trig, \trigRate, \trigRateV, \density, \grainDur, \grainRate, \grainRateV, \delay, \delayV, \pan, \panV, \env, \decay, \decayV, \delayRound, \delayRoundOffset];
+	krArgs = lagArgs ++ [\amp, \feedAmp, \filtHi, \filtLo, \feedDist, \inAmp, \dryAmp, \dryDelay, \gate, \envBuf];
 	trArgs = [\ttrig];
 
 	func = UDef(\grainDelay2Base).arFunc;
@@ -224,14 +253,14 @@ UDef(\grainDelay2, ar: {
 	argEnv[\dryAmp] 	= env * argEnv[\dryAmp];
 	argEnv[\feedAmp] 	= env * argEnv[\feedAmp];
 
-	argEnv[\trig] = argEnv[\trig] + TDuty.ar(
-		(
-			argEnv[\trigRate] * 2.pow(
-				Dgauss(argEnv[\trigRateV].neg, argEnv[\trigRateV], 9999999)
-			)
-		).reciprocal
+	trig = TDuty.ar(
+		(argEnv[\trigRate] * 2.pow(
+			Dseq(Dgauss(argEnv[\trigRateV].neg, argEnv[\trigRateV], 9999999), inf)
+		)).reciprocal,
+		0,
+		1
 	);
-	argEnv[\trig];
+	argEnv[\trig] = max(argEnv[\trig], trig);
 
 	// If density is provided, skip grainDur and use this to determine duration
 	argEnv[\grainDur] = (
@@ -268,7 +297,7 @@ UDef('grainDelay2.env', ar: {
 		\pan, \panV,
 		\env,
 		\feedAmp, \feedDist,
-		\filtLo, \filtHi,
+		\filtLo, \filtHi, \delayRound, \delayRoundOffset,
 		\ttrig
 	];
 	arArgs = [\in];
@@ -362,12 +391,13 @@ Pdef('grainDelay2.env', Pbind(
 );
 
 b = nil;
-Pdef('grainDelay2.linked', {
-	|group, addAction, in|
+Fdef('grainDelay2.linked', {
+	|pattern, group, addAction, in|
 	Pproto(
 		{
 			var dur = ~bufferDur ?? { 10 };
-			~in = in;
+
+			~in = in.asArray[0];
 			~buf = (
 				type: \buffer,
 				numFrames: dur * Server.default.sampleRate,
@@ -376,18 +406,31 @@ Pdef('grainDelay2.linked', {
 			b = ~buf;
 			// b = ~buf = Buffer.alloc(s, dur * Server.default.sampleRate, 1);
 			~group = (type: \group, group: group, addAction: addAction).yield;
-			~writerGroup = (type: \group, group: ~group, addAction: \addBefore).yield;
+			~writerGroup = (type: \group, group: ~group, addAction: \addToHead).yield;
+			~addAction = \addToTail;
 			~pos = (type: \audioBus).yield;
 			~writer = (
 				instrument: \grainDelay2Writer,
-				out: ~pos.out,
+				prOut: ~pos.out,
 				group: ~writerGroup,
 				buffer: ~buf,
 				in: ~in ?? 0,
 				fadeTime: 0.1,
-				addAction: \addToHead
+				addAction: \addToHead,
 			).play;
 			~pos = "a%".format(~pos.out).asSymbol;
+			~finish = ~finish.addFunc({
+				~inIndex = ~in.value.asArray;
+				~inIndex = ~inIndex.collect {
+					|in|
+					if (in.isSymbol) {
+						in.asString[1..].asInteger
+					} {
+						in
+					}
+				};
+				~writer.set(\in, ~inIndex.asArray[0]);
+			});
 
 			nil.yield;
 		},
@@ -409,7 +452,7 @@ Pdef('grainDelay2.linked', {
 		// 	};
 		// 	e;
 		// }) <>
-		Pid(),
+		pattern,
 		{
 			"freeeing %".format(~writer);
 			~writer.free;
@@ -417,17 +460,24 @@ Pdef('grainDelay2.linked', {
 	)
 });
 
+Pdef('grainDelay2.linked').source = {
+	|group, addAction, in|
+	Fdef('grainDelay2.linked').value(Pid(), group, addAction, in);
+};
+
 Pdef('grainDelay2.env.linked').source = Pdef('grainDelay2.linked').source.copy;
 
 Event.addParentType(\grainDelay2, (
 	instrument: \grainDelay2,
 	args: 		\grainDelay2.asSynthDesc.controlNames,
+	trig:       0,
 	// envBuf:     ~grainEnvBuf
 ).putAll(UDef(\grainDelay2).arArgs));
 
 Event.addParentType('grainDelay2.linked', (
 	instrument: 'grainDelay2.linked',
 	args: 		'grainDelay2.linked'.asSynthDesc.controlNames,
+	trig:       0,
 	// envBuf:     ~grainEnvBuf
 ).putAll(UDef(\grainDelay2).arArgs));
 
@@ -435,6 +485,7 @@ Event.addParentType('grainDelay2.env', (
 	instrument: 'grainDelay2.env',
 	args: 		'grainDelay2.env'.asSynthDesc.controlNames,
 	envArgs:    ~grainDelay2EnvArgs,
+	trig:       0,
 	// envBuf:     ~grainEnvBuf,
 	// buf: 	~grainDelayBuf,
 	// bufPos: 	Ndef(\grainDelay2Writer).asMap,
