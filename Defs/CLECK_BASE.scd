@@ -5,9 +5,15 @@ var cleck = (
 		if (skew.isKindOf(Env).not) {
 			skew = skew.asArray.collect({
 				|s|
-				if (s.isRest) { s } { Env([1, s], [1])  }
+				s = s.value;
+				if (s.isRest) {
+					s
+				} {
+					s.asEnv
+				}
 			});
 		};
+
 		if (rate.isKindOf(Env).not) {
 			rate = rate.asArray.collect({
 				|r, i|
@@ -16,7 +22,7 @@ var cleck = (
 					r
 				} {
 					(r.asEnv * skew.wrapAt(i)).curves_(curve)
-				}
+				};
 			});
 		};
 		if (rate.size == 1) { rate = rate[0] };
@@ -27,9 +33,15 @@ var cleck = (
 		if (skew.isKindOf(Env).not) {
 			skew = skew.asArray.collect({
 				|s|
-				if (s.isRest) { s } { Env([0, s], [1])  }
+				s = s.value;
+				if (s.isRest) {
+					s
+				} {
+					s.asEnv
+				}
 			});
 		};
+
 		if (rate.isKindOf(Env).not) {
 			rate = rate.asArray.collect({
 				|r, i|
@@ -37,8 +49,8 @@ var cleck = (
 				if (r.isRest) {
 					r
 				} {
-					(r.asEnv + skew.wrapAt(i)).curves_(curve)
-				}
+					(r.asEnv * skew.wrapAt(i)).curves_(curve)
+				};
 			});
 		};
 		if (rate.size == 1) { rate = rate[0] };
@@ -50,7 +62,6 @@ var cleck = (
 	// TRIGGERING
 	trOctave: 3,
 	trDegree: 0,
-	trScale: Scale.chromatic,
 	trDetune: 0,
 	trDegreeSkew: 0,
 	trCurve: \exp,
@@ -61,7 +72,7 @@ var cleck = (
 		var e = (
 			octave: ~trOctave.value,
 			degree: ~trDegree.value,
-			scale: ~trScale.value,
+			scale: ~scale.value,
 			detune: ~trDetune.value,
 			note: ~trNote.value,
 			midinote: ~trMidinote.value,
@@ -146,7 +157,7 @@ var cleck = (
 			~attack,
 			1 - ~attack,
 			1,
-			~ampCurve
+			~ampCurve * [1, -1]
 		);
 	},
 
