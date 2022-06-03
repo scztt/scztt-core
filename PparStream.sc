@@ -18,7 +18,7 @@ PparStream : Stream {
 						\pattern, \type,
 						\parentType, \addToCleanup,
 						\removeFromCleanup, \sustain,
-						\legato, \timingOffset, \delta
+						\legato, \timingOffset, \delta, \gatePattern
 					].collect([_, nil]).flatten
 				)
 			} {
@@ -35,8 +35,8 @@ PparStream : Stream {
 			};
 
 			sustain = ~sustain.value;
-			timingOffset = (~timingOffset.value ? 0);
-			gatePattern = (~gatePattern.value ? true);
+			~timingOffset = timingOffset = (~timingOffset.value ? 0);
+			~gatePattern = gatePattern = (~gatePattern.value ? true);
 
 			if (~flop ?? { false }) {
 				outerEvent = outerEvent.asPairs.flop.collect(_.asEvent);
@@ -56,7 +56,7 @@ PparStream : Stream {
 						innerPattern = Pdef(pattern);
 					};
 
-					if (innerPattern.isStream and: { outerEvent.size > 1 }) {
+					if (innerPattern.isKindOf(Stream) and: { outerEvent.size > 1 }) {
 						innerPattern = innerPattern.copy;
 					};
 
