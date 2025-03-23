@@ -10,6 +10,8 @@ MAS : Singleton {
 	var player, addr;
 
 	*initClass {
+		Class.initClassTree(SynthDescLib);
+
 		SynthDef(\maschine_2, {
 			var sig, in;
 

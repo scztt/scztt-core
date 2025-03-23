@@ -24,7 +24,7 @@ AudioCapture {
 
 	numChannels_{
 		|n|
-		n = n.asInteger;
+		n = n.asInteger; 
 		if (numChannels != n) {
 			numChannels = n;
 			this.changed(\numChannels, numChannels);

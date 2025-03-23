@@ -2,8 +2,8 @@ HardCompress : UGen {
 	*ar {
 		| sig, speed=1, minAmp=0.01, amp=1.0 |
 		var inAmp, ampThresh;
-		inAmp = Amplitude.ar( sig, 0.0001, speed ).max( minAmp );
-		^sig/inAmp;
+		inAmp = Amplitude.ar( sig.mean, 0.0001, speed ).max( minAmp );
+		^sig / inAmp;
 	}
 }
 

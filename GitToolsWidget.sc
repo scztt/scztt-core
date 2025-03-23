@@ -22,7 +22,7 @@ GitToolsWidget : ServerWidgetBase {
 					changedMenu = Menu(),
 					branchButton = MenuAction().icon_(Material("device_hub", buttonSize)),
 					commitButton = MenuAction().icon_(Material("save", buttonSize)).action_({
-						Require("/Users/fsc/Desktop/scztt-Core/git-dialog.scd", always:true)
+						Require("~/Desktop/scztt-Core/git-dialog.scd", always:true)
 					}),
 					MenuAction.separator,
 					repoButton = MenuAction(),

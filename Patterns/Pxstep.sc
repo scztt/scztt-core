@@ -46,3 +46,10 @@ Pxstep : Pattern {
 		^[list, durs, repeats]
 	}
 }
+
++Object {
+	xstep {
+		|durs = 1, curves=0, repeats = 1|
+		^Pxstep(this, durs, curves, repeats)
+	}
+}

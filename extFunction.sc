@@ -31,4 +31,16 @@
 
 		^factory.(this, args)
 	}
+
+	asSingleCycle {
+		|samples=1024, action|
+		var duration = samples / Server.default.sampleRate;
+		{
+			this.value(duration.reciprocal, samples)
+		}.loadToFloatArray(duration, Server.default, action:{
+			|a|
+			a = Signal.newFrom(a);
+			action.value(a)
+		})
+	}
 }

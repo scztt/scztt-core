@@ -240,15 +240,11 @@ Pxfade : Pattern {
 			};
 		};
 
-		fadeFuncStream.postln;
-
 		fadeFuncStream = Pfunc({
 			|func|
-			func.postln;
 			{
 				|...args|
 				var argInputs, fade, fadeFuncArgs, fadeStart, subFade, subInputs;
-				args.postln;
 				argInputs = args[0..(inputs.size - 1)];
 				fade = args[inputs.size];
 				fadeFuncArgs = args[(inputs.size+1)..];
